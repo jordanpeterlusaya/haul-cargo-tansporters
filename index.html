@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0B1F17" />
+  <meta name="description" content="Haul Cargo Transporter Portal — register your transport company, choose operating regions, and manage cargo delivery orders." />
+  <title>Haul Cargo · Transporter Portal</title>
+  <link rel="icon" href="./assets/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css?v=20261028a" />
+</head>
+<body class="auth-boot">
+  <div id="public">
+    <header class="public-nav">
+      <a class="mark" href="#/">
+        <img src="./assets/logo.svg" alt="" width="28" height="28" />
+        <span>Haul Cargo</span>
+      </a>
+      <div class="public-nav-actions">
+        <button class="btn link quiet" id="quietLogin" type="button">Login</button>
+        <button class="btn primary small" id="navRegister" type="button">Register</button>
+      </div>
+    </header>
+
+    <section class="hero" id="landing">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">Transporter Portal</p>
+          <h1>Haul Cargo</h1>
+          <p class="subline">Connect your transport company with verified cargo delivery orders across Tanzania. One dashboard for offers, acceptances, and live shipments.</p>
+          <div class="hero-cta">
+            <button class="btn primary" id="heroCta" type="button">Register Transport Company</button>
+            <button class="btn line" id="heroRegister" type="button">Login</button>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="hero-panel">
+            <span class="hero-panel-label">Operating network</span>
+            <strong>Region-matched orders</strong>
+            <p>See only cargo you can move — based on the regions you select at registration.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="home-strip">
+      <article>
+        <h2>Register</h2>
+        <p>Create a company account with your business email and notification phone.</p>
+      </article>
+      <article>
+        <h2>Choose regions</h2>
+        <p>Serve all of Tanzania or pick specific regions such as Dar es Salaam, Arusha, and Mwanza.</p>
+      </article>
+      <article>
+        <h2>Manage orders</h2>
+        <p>Accept eligible cargo, track in transit, and keep your team aligned from one portal.</p>
+      </article>
+    </section>
+
+    <footer class="public-footer">
+      <span>© Haul Cargo</span>
+      <span class="footer-dot" aria-hidden="true">·</span>
+      <button class="btn link quiet" id="footerLogin" type="button">Login</button>
+      <span class="footer-dot" aria-hidden="true">·</span>
+      <button class="btn link quiet" id="footerRegister" type="button">Register Transport Company</button>
+    </footer>
+
+    <section class="auth-shell hidden" id="authCard">
+      <div class="auth-panel">
+        <h2 id="authTitle">Login</h2>
+        <p class="auth-lead" id="authLead">Open your company dashboard.</p>
+        <form id="authForm">
+          <div id="registerFields" class="hidden">
+            <div class="reg-step" data-reg-step="1">
+              <label>Company name</label>
+              <input name="companyName" placeholder="e.g. Coastal Freight Ltd" autocomplete="organization" />
+              <div class="form-grid">
+                <div>
+                  <label>Contact person</label>
+                  <input name="contactPerson" autocomplete="name" />
+                </div>
+                <div>
+                  <label>Company phone (order SMS)</label>
+                  <input name="phone" placeholder="07…" inputmode="tel" autocomplete="tel" />
+                </div>
+              </div>
+              <label>Office location</label>
+              <input name="location" placeholder="Kariakoo, Dar es Salaam" autocomplete="address-line1" />
+              <input type="hidden" name="businessDetails" value="" />
+            </div>
+
+            <div class="reg-step hidden" data-reg-step="2">
+              <p class="step-label">Base region &amp; operating coverage</p>
+              <label for="regRegion">Company base region</label>
+              <select id="regRegion" name="region" required>
+                <option value="">Select region…</option>
+              </select>
+              <fieldset class="coverage-box">
+                <legend>Operating regions</legend>
+                <label class="check-row">
+                  <input type="checkbox" name="coverageAllTanzania" id="coverageAllTanzania" value="1" />
+                  <span>All Tanzania regions</span>
+                </label>
+                <p class="muted">If unchecked, select one or more regions below. Leave blank only when “All Tanzania” is selected.</p>
+                <div class="region-grid" id="coverageRegionGrid"></div>
+              </fieldset>
+              <div class="reg-nav">
+                <button class="btn ghost reg-back" type="button" data-reg-back="1">Back</button>
+              </div>
+            </div>
+
+            <div class="reg-step hidden" data-reg-step="3">
+              <label>Business email</label>
+              <input name="email" type="email" autocomplete="username" required />
+              <label>Password</label>
+              <div class="password-wrap">
+                <input name="password" type="password" autocomplete="new-password" minlength="6" required data-password />
+                <button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button>
+              </div>
+              <label>Confirm password</label>
+              <div class="password-wrap">
+                <input name="passwordConfirm" type="password" autocomplete="new-password" minlength="6" required data-password />
+                <button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button>
+              </div>
+              <label class="check-row terms-row">
+                <input type="checkbox" name="termsAccepted" id="termsAccepted" value="1" required />
+                <span>I accept the Haul Cargo terms and conditions for transporter partners.</span>
+              </label>
+              <div class="reg-nav">
+                <button class="btn ghost reg-back" type="button" data-reg-back="2">Back</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="loginFields">
+            <label for="loginEmail">Business email</label>
+            <input id="loginEmail" name="email" type="email" autocomplete="username" required />
+            <label for="loginPassword">Password</label>
+            <div class="password-wrap">
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" minlength="6" required data-password />
+              <button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button>
+            </div>
+            <button class="btn link" id="forgotPassword" type="button">Forgot password?</button>
+          </div>
+          <p class="form-success hidden" id="authSuccess"></p>
+          <p class="form-error" id="authError" role="alert"></p>
+          <button class="btn primary" type="submit" id="authSubmit">Login</button>
+          <button class="btn ghost" type="button" id="authSwitch">Need an account?</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="shell">
+      <button class="nav-scrim" id="navScrim" type="button" aria-label="Close menu"></button>
+      <aside class="sidebar" id="sidebar">
+        <div class="side-head">
+          <a class="mark" href="#/overview">
+            <img src="./assets/logo.svg" alt="" width="28" height="28" />
+            <span>Haul Cargo</span>
+          </a>
+          <button class="nav-close" id="navClose" type="button" aria-label="Close menu">×</button>
+        </div>
+        <div id="nav"></div>
+      </aside>
+      <main class="main">
+        <div class="topbar">
+          <div class="topbar-title">
+            <button class="menu-btn" id="menuBtn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+              <span class="menu-bars" aria-hidden="true"><i></i><i></i><i></i></span>
+            </button>
+            <h1 id="pageTitle">Dashboard</h1>
+          </div>
+          <div class="who">
+            <strong id="companyLabel">Company</strong>
+            <span class="status-dot" id="statusLabel"></span>
+            <button class="btn ghost small" id="notesBtn" type="button" title="Notifications">
+              Alerts <span class="note-count hidden" id="noteCount">0</span>
+            </button>
+            <button class="btn ghost small" id="signOutBtn" type="button">Logout</button>
+          </div>
+        </div>
+        <div id="view"></div>
+      </main>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js?v=20261028a"></script>
+</body>
+</html>
