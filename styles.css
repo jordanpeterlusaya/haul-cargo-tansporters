@@ -23,9 +23,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-body.auth-boot #public,
-body.auth-boot #app {
-  visibility: hidden;
+/* Do not hide the whole site during auth boot — a JS parse/load failure used to leave a blank white page. */
+body.auth-boot #public {
+  opacity: 0.92;
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }

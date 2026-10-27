@@ -1586,7 +1586,7 @@ function historiaPage() {
 function manifestPage() {
   const rows = todayCargoRows()
     .filter((item) => item.shipmentStatus !== 'delivered')
-    .sort((a, b) => String(dropOffLabel(a)).localeCompare(String(dropOffLabel(b), 'sw'));
+    .sort((a, b) => String(dropOffLabel(a)).localeCompare(String(dropOffLabel(b)), 'sw'));
   const groups = new Map();
   rows.forEach((item) => {
     const town = dropOffLabel(item);
@@ -2795,6 +2795,15 @@ function finishAuthBoot() {
   document.body.classList.remove('auth-boot');
 }
 
+// Never leave a blank white page if Firebase/auth is slow or blocked.
+setTimeout(() => {
+  if (!state.authReady) {
+    console.warn('[auth] boot timeout — showing public UI');
+    finishAuthBoot();
+    if (!state.user) showPublic(authModeFromHash());
+  }
+}, 2500);
+
 bindAuth();
 async function bootstrapAuth() {
   await setPersistence(auth, browserLocalPersistence).catch(() => null);
@@ -2802,6 +2811,7 @@ async function bootstrapAuth() {
     loadSession(user)
       .catch((error) => {
         console.error(error);
+        if (!state.user) showPublic(authModeFromHash());
       })
       .finally(() => {
         if (!state.authReady) finishAuthBoot();
@@ -2811,4 +2821,5 @@ async function bootstrapAuth() {
 bootstrapAuth().catch((error) => {
   console.error(error);
   finishAuthBoot();
+  showPublic(authModeFromHash());
 });
