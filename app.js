@@ -707,49 +707,49 @@ function loginAuthErrorMessage(error) {
     case 'auth/wrong-password':
     case 'auth/invalid-credential':
     case 'auth/invalid-login-credentials':
-      return 'Nenosiri si sahihi.';
+      return 'Incorrect email or password.';
     case 'auth/user-not-found':
-      return 'Akaunti haipo kwa barua pepe hii.';
+      return 'No account found for this email.';
     case 'auth/invalid-email':
-      return 'Barua pepe si sahihi.';
+      return 'Enter a valid business email.';
     case 'auth/too-many-requests':
-      return 'Umejaribu mara nyingi. Subiri kidogo.';
+      return 'Too many attempts. Please wait and try again.';
     case 'auth/network-request-failed':
-      return 'Hakuna mtandao. Jaribu tena.';
+      return 'Network error. Check your connection and try again.';
     case 'auth/user-disabled':
-      return 'Akaunti imezimwa. Wasiliana na msaada.';
+      return 'This account is disabled. Contact Haul support.';
     default:
       break;
   }
-  return 'Imeshindwa kuingia. Jaribu tena.';
+  return 'Login failed. Please try again.';
 }
 
 function authErrorMessage(error) {
   const code = String(error?.code || '');
   if (LOGIN_CREDENTIAL_CODES.has(code)) {
-    return 'Nenosiri si sahihi.';
+    return 'Incorrect email or password.';
   }
   switch (code) {
     case 'auth/user-not-found':
-      return 'Akaunti haipo kwa barua pepe hii.';
+      return 'No account found for this email.';
     case 'auth/email-already-in-use':
-      return 'Barua pepe hii tayari imesajiliwa. Ingia.';
+      return 'This business email is already registered. Please log in.';
     case 'auth/weak-password':
-      return 'Nenosiri liwe na herufi 6 au zaidi.';
+      return 'Password must be at least 6 characters.';
     case 'auth/invalid-email':
-      return 'Barua pepe si sahihi.';
+      return 'Enter a valid business email.';
     case 'auth/too-many-requests':
-      return 'Umejaribu mara nyingi. Subiri kidogo.';
+      return 'Too many attempts. Please wait and try again.';
     case 'auth/network-request-failed':
-      return 'Hakuna mtandao. Jaribu tena.';
+      return 'Network error. Check your connection and try again.';
     case 'auth/user-disabled':
-      return 'Akaunti imezimwa. Wasiliana na msaada.';
+      return 'This account is disabled. Contact Haul support.';
     case 'permission-denied':
-      return 'Huna ruhusa. Jaribu tena baadaye.';
+      return 'Permission denied. Try again later.';
     case 'unavailable':
-      return 'Huduma haipatikani. Jaribu tena.';
+      return 'Service temporarily unavailable. Try again.';
     case 'failed-precondition':
-      return 'Huduma haiko tayari. Jaribu tena.';
+      return 'Service is not ready. Try again.';
     default:
       break;
   }
@@ -757,7 +757,7 @@ function authErrorMessage(error) {
   if (msg && !/firebase/i.test(msg) && !/^auth\//.test(msg) && !code.startsWith('auth/')) {
     return msg;
   }
-  return 'Imeshindwa. Jaribu tena.';
+  return 'Something went wrong. Please try again.';
 }
 
 function readLoginCredentials() {
