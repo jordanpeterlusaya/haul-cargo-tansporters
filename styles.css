@@ -1269,20 +1269,56 @@ body:has(#app:not(.hidden)) {
 .step-label { font-weight: 600; margin: 0 0 0.75rem; }
 .reg-nav { margin-top: 1rem; }
 
-.note-count {
+.bell-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
   display: inline-flex;
-  min-width: 1.25rem;
-  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.bell-btn.has-unread { animation: bell-shake 0.6s ease; }
+@keyframes bell-shake {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(-12deg); }
+  75% { transform: rotate(12deg); }
+}
+.note-count {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  display: inline-flex;
+  min-width: 1.1rem;
+  height: 1.1rem;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: var(--haul-ink);
-  color: var(--yellow);
-  font-size: 0.7rem;
+  background: #111;
+  color: #f5e000;
+  font-size: 0.65rem;
   font-weight: 700;
-  padding: 0 0.35rem;
-  margin-left: 0.25rem;
+  padding: 0 0.3rem;
 }
+.tier-card h2 { font-family: "Syne", sans-serif; margin: 0.2rem 0 0.4rem; }
+.tier-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.08);
+  margin: 0.8rem 0;
+  overflow: hidden;
+}
+.tier-bar span { display: block; height: 100%; background: #111; }
+.tier-ladder { display: grid; gap: 0.25rem; font-size: 0.9rem; }
+.tier-ladder .on { font-weight: 700; }
+.tier-bronze { box-shadow: inset 4px 0 0 #c48c58; }
+.tier-silver { box-shadow: inset 4px 0 0 #94a3b8; }
+.tier-gold { box-shadow: inset 4px 0 0 #e8b339; }
+.tier-platinum { box-shadow: inset 4px 0 0 #7dd3fc; }
 
 .welcome-banner {
   background: var(--haul-ink);

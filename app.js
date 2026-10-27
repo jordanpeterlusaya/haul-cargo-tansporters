@@ -13,6 +13,7 @@ import {
   addDoc,
   arrayUnion,
   collection,
+  deleteDoc,
   deleteField,
   doc,
   getDoc,
@@ -112,6 +113,8 @@ const state = {
   vehicles: [],
   staff: [],
   notes: [],
+  notesReady: false,
+  drivers: [],
   mode: 'login',
   needsCompanySetup: false,
   unsubscribers: [],
@@ -910,9 +913,39 @@ function initRegionControls() {
 function refreshNoteBadge() {
   const unread = (state.notes || []).filter((n) => !n.readAt && n.read !== true).length;
   const el = $('noteCount');
-  if (!el) return;
-  el.textContent = String(unread);
-  el.classList.toggle('hidden', unread < 1);
+  const btn = $('notesBtn');
+  if (el) {
+    el.textContent = unread > 9 ? '9+' : String(unread);
+    el.classList.toggle('hidden', unread < 1);
+  }
+  btn?.classList.toggle('has-unread', unread > 0);
+}
+
+let chimeCtx = null;
+function playOfferChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    if (!chimeCtx) chimeCtx = new AudioCtx();
+    const ctx = chimeCtx;
+    const start = ctx.currentTime;
+    [880, 1174, 1568].forEach((freq, index) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.08, start + 0.02 + index * 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.28 + index * 0.08);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start + index * 0.09);
+      osc.stop(start + 0.4 + index * 0.09);
+    });
+    if (ctx.state === 'suspended') ctx.resume().catch(() => null);
+  } catch {
+    /* sound optional */
+  }
 }
 
 function showPublic(authMode) {
@@ -974,11 +1007,10 @@ function navButton(page, label) {
 const NAV = [
   ['overview', 'Dashboard'],
   ['available', 'Available Orders'],
-  ['mine', 'My Orders'],
   ['transit', 'In Transit'],
-  ['completed', 'Completed Orders'],
-  ['drivers', 'Drivers & Vehicles'],
-  ['notifications', 'Notifications'],
+  ['history', 'History'],
+  ['drivers', 'Drivers'],
+  ['finance', 'Finance'],
   ['profile', 'Company Profile'],
   ['settings', 'Settings'],
 ];
@@ -986,29 +1018,32 @@ const FOLDED = {
   dashboard: 'overview',
   orders: 'available',
   assignments: 'available',
-  manifest: 'mine',
-  mizigo: 'mine',
-  historia: 'completed',
-  history: 'completed',
+  manifest: 'history',
+  mizigo: 'history',
+  mine: 'history',
+  historia: 'history',
+  completed: 'history',
   trips: 'drivers',
   vehicles: 'drivers',
   staff: 'drivers',
   routes: 'settings',
-  fares: 'settings',
-  payments: 'settings',
-  receipts: 'settings',
-  customers: 'settings',
-  reports: 'settings',
-  account: 'settings',
+  fares: 'finance',
+  payments: 'finance',
+  receipts: 'history',
+  customers: 'history',
+  reports: 'finance',
+  account: 'profile',
   settings: 'settings',
   profile: 'profile',
   verification: 'profile',
   notifications: 'notifications',
   available: 'available',
-  mine: 'mine',
   transit: 'transit',
-  completed: 'completed',
+  history: 'history',
   drivers: 'drivers',
+  finance: 'finance',
+  uthibitisho: 'overview',
+  desk: 'finance',
 };
 
 function navActive(page) {
@@ -1021,11 +1056,7 @@ function navActive(page) {
 }
 
 function renderNav() {
-  const links = NAV.map(([page, label]) => navButton(page, label)).join('');
-  const adminOnly = state.isAdmin
-    ? navButton('uthibitisho', 'Uthibitisho') + navButton('desk', 'Ofisi')
-    : '';
-  $('nav').innerHTML = links + adminOnly;
+  $('nav').innerHTML = NAV.map(([page, label]) => navButton(page, label)).join('');
 }
 
 function listen() {
@@ -1037,6 +1068,8 @@ function listen() {
     state.vehicles = [];
     state.staff = [];
     state.notes = [];
+    state.drivers = [];
+    state.notesReady = false;
     render();
     return;
   }
@@ -1062,9 +1095,15 @@ function listen() {
   watch(query(collection(db, 'carrierRoutes'), where('carrierId', '==', id)), (rows) => { state.routes = rows; });
   watch(query(collection(db, 'carrierVehicles'), where('carrierId', '==', id)), (rows) => { state.vehicles = rows; });
   watch(query(collection(db, 'carrierStaff'), where('carrierId', '==', id)), (rows) => { state.staff = rows; });
+  watch(query(collection(db, 'carrierDrivers'), where('carrierId', '==', id)), (rows) => { state.drivers = rows; });
   watch(collection(db, 'carriers', id, 'notifications'), (rows) => {
-    state.notes = rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const next = rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const prevIds = new Set((state.notes || []).map((item) => item.id));
+    const fresh = next.filter((item) => !prevIds.has(item.id) && !item.readAt && item.read !== true);
+    state.notes = next;
     refreshNoteBadge();
+    if (state.notesReady && fresh.length) playOfferChime();
+    state.notesReady = true;
   });
 }
 
@@ -1244,9 +1283,14 @@ function availableOrdersPage() {
     ${ordersTable(rows, true)}</section>`;
 }
 
-function myOrdersPage() {
-  const rows = state.shipments.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus !== 'delivered');
-  return `<section class="panel"><div class="section-head"><h2>My Orders</h2></div>${ordersTable(rows, false)}</section>`;
+function historyPage() {
+  const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
+  const completed = owned.filter((item) => item.shipmentStatus === 'delivered');
+  const accepted = owned.filter((item) => ['accepted', 'contacted', 'pickup_scheduled', 'picked_up'].includes(item.shipmentStatus));
+  const transit = owned.filter((item) => ['in_transit', 'arrived', 'at_bus'].includes(item.shipmentStatus));
+  const declined = state.shipments.filter((item) => Array.isArray(item.declinedCarrierIds) && item.declinedCarrierIds.includes(state.carrier?.id));
+  const block = (title, rows) => `<section class="panel"><div class="section-head"><h2>${title}</h2><span class="muted">${rows.length}</span></div>${ordersTable(rows, false)}</section>`;
+  return `${block('Completed orders', completed)}${block('Accepted', accepted)}${block('In transit', transit)}${declined.length ? block('Declined', declined) : ''}`;
 }
 
 function transitOrdersPage() {
@@ -1254,20 +1298,158 @@ function transitOrdersPage() {
   return `<section class="panel"><div class="section-head"><h2>In Transit</h2></div>${ordersTable(rows, false)}</section>`;
 }
 
-function completedOrdersPage() {
-  const rows = state.shipments.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'delivered');
-  return `<section class="panel"><div class="section-head"><h2>Completed Orders</h2></div>${ordersTable(rows, false)}</section>`;
+function orderBrief(item) {
+  return [
+    `HAUL cargo · ${item.orderNumber || item.id.slice(0, 8)}`,
+    `Pickup: ${item.pickupLabel || item.origin || '—'}`,
+    `Destination: ${item.destination || item.dropoffLabel || '—'}`,
+    `Cargo: ${item.parcelDescription || 'Cargo'}${item.weightKg ? ` · ${item.weightKg} kg` : ''}`,
+    `Price: ${money(priceOf(item))}`,
+    item.pickupLatitude && item.pickupLongitude
+      ? `Map: https://www.google.com/maps/dir/?api=1&destination=${item.pickupLatitude},${item.pickupLongitude}`
+      : `Map: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.pickupLabel || item.destination || 'Dar es Salaam')}`,
+    `Details: ${location.origin}${location.pathname}#/assignment/${item.id}`,
+  ].join('\n');
+}
+
+function whatsappHref(phone, text) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  const intl = digits.startsWith('0') ? `255${digits.slice(1)}` : digits;
+  return `https://wa.me/${intl}?text=${encodeURIComponent(text)}`;
 }
 
 function driversPage() {
-  const vehicles = state.vehicles || [];
-  const staff = state.staff || [];
-  return `<section class="panel"><h2>Drivers &amp; Vehicles</h2>
-    <p class="muted">Keep fleet and dispatcher contacts up to date for operations.</p>
-    <h3 style="margin-top:1rem">Vehicles</h3>
-    ${vehicles.map((v) => `<p><strong>${esc(v.plate || v.name || v.id)}</strong> · ${esc(v.status || 'active')}</p>`).join('') || '<p class="empty">No vehicles yet.</p>'}
-    <h3 style="margin-top:1rem">Staff</h3>
-    ${staff.map((s) => `<p><strong>${esc(s.name || s.email)}</strong> · ${esc(s.role || '')}</p>`).join('') || '<p class="empty">No staff invited yet.</p>'}
+  const drivers = state.drivers || [];
+  const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus !== 'delivered');
+  const driverOptions = drivers.map((driver) => `<option value="${esc(driver.id)}">${esc(driver.name || 'Driver')} · ${esc(driver.phone || '')}</option>`).join('');
+  return `<section class="panel"><h2>Add driver</h2>
+    <p class="muted">Your company drivers receive orders on WhatsApp with shipment details and a Google Maps link.</p>
+    <form id="driverForm" class="form-grid">
+      <input name="name" placeholder="Driver name" required />
+      <input name="phone" placeholder="WhatsApp phone 07…" required />
+      <input name="vehicle" placeholder="Vehicle / plate" />
+      <button class="btn primary" type="submit">Add driver</button>
+    </form>
+  </section>
+  <section class="panel"><h2>Send order via WhatsApp</h2>
+    ${drivers.length && owned.length ? `<form id="dispatchForm" class="form-grid">
+      <select name="driverId" required>${driverOptions}</select>
+      <select name="orderId" required>${owned.map((item) => `<option value="${esc(item.id)}">${esc(item.orderNumber || item.id.slice(0, 8))} · ${esc(item.destination || '')}</option>`).join('')}</select>
+      <button class="btn primary" type="submit">Open WhatsApp</button>
+    </form>` : '<p class="empty">Add a driver and accept an order first.</p>'}
+  </section>
+  <section class="panel"><h2>Drivers</h2>
+    ${drivers.map((driver) => `<article class="cargo-item">
+      <div class="cargo-item-body"><strong>${esc(driver.name || 'Driver')}</strong>
+        <span class="cargo-item-meta">${esc(driver.phone || '')}${driver.vehicle ? ` · ${esc(driver.vehicle)}` : ''}</span>
+      </div>
+      <div class="cargo-item-actions"><button class="btn line small" data-act="remove-driver" data-id="${esc(driver.id)}" type="button">Remove</button></div>
+    </article>`).join('') || '<p class="empty">No drivers yet.</p>'}
+  </section>`;
+}
+
+const TIER_RULES = [
+  { id: 'bronze', label: 'Bronze', minStreak: 0, feePercent: 20, priority: 'Standard offers', payCeilingTzs: 30000 },
+  { id: 'silver', label: 'Silver', minStreak: 100, feePercent: 18, priority: 'Slight priority', payCeilingTzs: 60000 },
+  { id: 'gold', label: 'Gold', minStreak: 250, feePercent: 17, priority: 'Higher priority', payCeilingTzs: 100000 },
+  { id: 'platinum', label: 'Platinum', minStreak: 500, feePercent: 15, priority: 'Top priority', payCeilingTzs: 150000 },
+];
+
+function companyStanding() {
+  const carrier = state.carrier || {};
+  const owned = state.shipments.filter((item) => item.carrierId === carrier.id);
+  const completedTimes = owned
+    .filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived')
+    .map((item) => item.deliveredAt?.toDate?.()?.getTime?.() || Date.parse(item.deliveredAt || 0) || 0)
+    .filter((ms) => ms > 0);
+  const breakTimes = owned
+    .flatMap((item) => (item.statusHistory || []).filter((entry) => ['matching', 'rejected'].includes(entry.status)).map((entry) => Date.parse(entry.at || 0) || 0))
+    .filter((ms) => ms > 0);
+  const latestBreak = breakTimes.reduce((max, ms) => Math.max(max, ms), 0);
+  const streak = latestBreak > 0 ? completedTimes.filter((ms) => ms > latestBreak).length : completedTimes.length;
+  const completed = completedTimes.length || Number(carrier.deliveries) || 0;
+  const rejects = Number(carrier.rejected) || 0;
+  const postAcceptCancels = Number(carrier.postAcceptCancels) || 0;
+  const decisions = completed + rejects;
+  const cancelRate = decisions > 0 ? rejects / decisions : 0;
+  let tier = TIER_RULES[0];
+  for (const rule of TIER_RULES) if (streak >= rule.minStreak) tier = rule;
+  const highCancel = cancelRate > 0.25 && decisions >= 8;
+  const closure = Boolean(carrier.offersPaused || carrier.fraudHold) || postAcceptCancels >= 3 || (cancelRate >= 0.4 && decisions >= 8);
+  const punished = highCancel || closure;
+  const next = TIER_RULES[TIER_RULES.findIndex((rule) => rule.id === tier.id) + 1] || null;
+  const unpaid = owned.reduce((sum, item) => {
+    const done = item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived';
+    if (!done) return sum;
+    const fee = Math.max(0, Math.round(Number(item.haulFee) || 0));
+    const paid = item.cashStatus === 'reconciled' ? fee : Math.min(fee, Math.round(Number(item.commissionPaidTzs) || 0));
+    return sum + Math.max(0, fee - paid);
+  }, 0);
+  const ceiling = punished ? TIER_RULES[0].payCeilingTzs : tier.payCeilingTzs;
+  return {
+    streak,
+    completed,
+    rejects,
+    postAcceptCancels,
+    cancelPercent: Math.round(cancelRate * 100),
+    closure,
+    feePercent: punished ? 20 : tier.feePercent,
+    tier,
+    next,
+    unpaid,
+    ceiling,
+    blocked: closure || unpaid >= ceiling,
+    reason: closure
+      ? (carrier.fraudHold?.reason || 'New offers are paused until Haul clears this account.')
+      : (unpaid >= ceiling ? 'New offers are paused until commission is paid.' : ''),
+  };
+}
+
+function financePage() {
+  const standing = companyStanding();
+  const next = standing.next ? `${standing.next.label} at streak ${standing.next.minStreak}` : 'Top tier';
+  const progress = standing.next ? Math.min(100, Math.round((standing.streak / standing.next.minStreak) * 100)) : 100;
+  const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
+  const delivered = owned.filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived');
+  const net = delivered.reduce((sum, item) => sum + (Number(item.carrierNet) || 0), 0);
+  const notice = standing.blocked
+    ? `<p class="form-error">${esc(standing.reason)}</p>`
+    : '';
+  return `${notice}
+  <section class="panel tier-card tier-${esc(standing.tier.id)}">
+    <p class="lp-kicker">Account level</p>
+    <h2>${esc(standing.tier.label)}</h2>
+    <p>Commission ${standing.feePercent}% · ${esc(standing.tier.priority)}</p>
+    <p class="muted">Streak ${standing.streak} · Next: ${esc(next)} · Cancels ${standing.cancelPercent}%</p>
+    <div class="tier-bar"><span style="width:${progress}%"></span></div>
+    <div class="tier-ladder">${TIER_RULES.map((rule) => `<span class="${rule.id === standing.tier.id ? 'on' : ''}">${esc(rule.label)} ${rule.feePercent}% · ceiling ${money(rule.payCeilingTzs)}</span>`).join('')}</div>
+  </section>
+  <div class="finance-row">
+    <article class="stat"><span>Unpaid commission</span><strong>${money(standing.unpaid)}</strong></article>
+    <article class="stat"><span>Pay ceiling</span><strong>${money(standing.ceiling)}</strong></article>
+    <article class="stat"><span>Carrier net</span><strong>${money(net)}</strong></article>
+    <article class="stat"><span>Completed</span><strong>${delivered.length}</strong></article>
+  </div>
+  <section class="panel"><h2>Pay commission</h2>
+    <p class="muted">USSD push via M-Pesa, Mixx, or Airtel. Any amount up to the unpaid balance.</p>
+    <form id="commissionForm" class="form-grid">
+      <input name="amount" type="number" min="100" max="${standing.unpaid || 0}" placeholder="Amount TZS" value="${standing.unpaid || ''}" required />
+      <input name="phone" placeholder="07…" value="${esc(state.carrier?.commissionPayerPhone || state.carrier?.phone || '')}" required />
+      <select name="network" required>
+        <option value="mpesa">M-Pesa</option>
+        <option value="mixx">Mixx by Yas</option>
+        <option value="airtel">Airtel Money</option>
+      </select>
+      <button class="btn primary" type="submit" ${standing.unpaid < 100 ? 'disabled' : ''}>Send USSD</button>
+    </form>
+    <p class="muted" id="payNote"></p>
+  </section>
+  <section class="panel"><h2>Commission by order</h2>
+    ${delivered.map((item) => {
+      const fee = Math.round(Number(item.haulFee) || 0);
+      const paid = item.cashStatus === 'reconciled' ? fee : Math.min(fee, Math.round(Number(item.commissionPaidTzs) || 0));
+      return `<p><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong> · fee ${money(fee)} · paid ${money(paid)} · due ${money(Math.max(0, fee - paid))}</p>`;
+    }).join('') || '<p class="empty">Completed shipments will show commission here.</p>'}
   </section>`;
 }
 
@@ -1397,26 +1579,6 @@ function pickupQueue() {
       <td>${badge(item.shipmentStatus === 'picked_up' ? 'picked_up' : item.shipmentStatus)}</td>
     </tr>`).join('')}
   </tbody></table></div>`;
-}
-
-function financePage() {
-  const rows = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
-  const today = new Date().toDateString();
-  const sum = (pred, field = 'cashExpected') => rows.filter(pred).reduce((total, item) => total + (Number(item[field]) || 0), 0);
-  const delivered = rows.filter((item) => item.shipmentStatus === 'delivered');
-  const collected = rows.filter((item) => ['collected', 'pending_reconciliation', 'reconciled'].includes(item.cashStatus));
-  const reconciled = rows.filter((item) => item.cashStatus === 'reconciled');
-  const cards = [
-    ["Today's revenue", money(delivered.filter((item) => new Date(item.deliveredAt || item.updatedAt || 0).toDateString() === today).reduce((total, item) => total + (Number(item.cashExpected) || 0), 0))],
-    ['Total revenue', money(sum((item) => item.shipmentStatus === 'delivered'))],
-    ['Cash collected', money(collected.reduce((total, item) => total + (Number(item.cashCollectedAmount) || Number(item.cashExpected) || 0), 0))],
-    ['Pending cash', money(sum((item) => item.carrierId && item.cashStatus === 'unpaid'))],
-    ['Haul commission', money(delivered.reduce((total, item) => total + (Number(item.haulFee) || 0), 0))],
-    ['Carrier net', money(delivered.reduce((total, item) => total + (Number(item.carrierNet) || 0), 0))],
-    ['Reconciled', money(reconciled.reduce((total, item) => total + (Number(item.cashCollectedAmount) || 0), 0))],
-    ['Outstanding', money(sum((item) => item.cashStatus && item.cashStatus !== 'reconciled' && item.shipmentStatus === 'delivered'))],
-  ];
-  return `<div class="cards">${cards.map(([label, value]) => `<article class="card"><span>${label}</span><strong>${esc(value)}</strong></article>`).join('')}</div>`;
 }
 
 function cashTable(rows) {
@@ -2085,10 +2247,10 @@ async function render() {
   const titles = {
     overview: 'Dashboard',
     available: 'Available Orders',
-    mine: 'My Orders',
     transit: 'In Transit',
-    completed: 'Completed Orders',
-    drivers: 'Drivers & Vehicles',
+    history: 'History',
+    drivers: 'Drivers',
+    finance: 'Finance',
     notifications: 'Notifications',
     profile: 'Company Profile',
     trips: 'Drivers & Vehicles',
@@ -2118,10 +2280,10 @@ async function render() {
     html = `<p class="page-lead">Welcome to the Haul desk.</p><p class="empty">Use the menu for orders, verification, or desk tools.</p>`;
   } else if (page === 'overview' || page === 'dashboard') html = dashboard();
   else if (page === 'available' || page === 'orders' || page === 'assignments') html = availableOrdersPage();
-  else if (page === 'mine' || page === 'manifest' || page === 'mizigo') html = myOrdersPage();
+  else if (page === 'history' || page === 'mine' || page === 'manifest' || page === 'mizigo' || page === 'completed' || page === 'historia') html = historyPage();
   else if (page === 'transit') html = transitOrdersPage();
-  else if (page === 'completed' || page === 'historia' || page === 'history') html = completedOrdersPage();
   else if (page === 'drivers' || page === 'trips' || page === 'vehicles') html = driversPage();
+  else if (page === 'finance' || page === 'payments' || page === 'fares' || page === 'reports') html = financePage();
   else if (page === 'notifications') html = companyPages();
   else if (page === 'profile' || page === 'verification' || page === 'staff') html = companyPages();
   else if (page === 'routes') html = routesPage();
@@ -2133,8 +2295,6 @@ async function render() {
   else if (page === 'settings' || page === 'account') html = settingsPage();
   else if (page === 'assignment') html = assignmentPage(id);
   else if (page === 'sticker') html = stickerPage(id);
-  else if (page === 'desk') html = await deskPage();
-  else if (page === 'uthibitisho') html = await uthibitishoPage();
   else if (['profile', 'verification', 'staff', 'notifications'].includes(page)) html = companyPages();
   else html = dashboard();
   viewEl.innerHTML = html;
@@ -2443,6 +2603,12 @@ async function onViewClick(event) {
     await updateDoc(ref, { customerIssue: note });
     await updateDoc(doc(db, 'carriers', state.carrier.id), { customerIssues: increment(1) });
   }
+  if (act === 'remove-driver') {
+    const driver = (state.drivers || []).find((item) => item.id === id);
+    if (!driver || driver.carrierId !== state.carrier?.id) throw new Error('Driver not found.');
+    await deleteDoc(doc(db, 'carrierDrivers', id));
+    return;
+  }
   if (act === 'fail') {
     await updateDoc(ref, { failedPickup: true, shipmentStatus: 'accepted' });
     await updateDoc(doc(db, 'carriers', state.carrier.id), { failedPickups: increment(1) });
@@ -2465,6 +2631,61 @@ async function onViewSubmit(event) {
       });
     }
     await updateDoc(doc(db, 'carriers', carrierId), { cargoCapacityKg: capacity });
+  }
+  if (form.id === 'driverForm') {
+    const id = await requireCarrier();
+    const phone = String(data.get('phone') || '').trim();
+    if (phone.replace(/\D/g, '').length < 9) throw new Error('Enter a valid driver phone.');
+    await addDoc(collection(db, 'carrierDrivers'), {
+      carrierId: id,
+      name: String(data.get('name') || '').trim(),
+      phone,
+      vehicle: String(data.get('vehicle') || '').trim(),
+      createdAt: serverTimestamp(),
+    });
+    form.reset();
+  }
+  if (form.id === 'dispatchForm') {
+    const driver = (state.drivers || []).find((item) => item.id === data.get('driverId'));
+    const order = state.shipments.find((item) => item.id === data.get('orderId'));
+    if (!driver?.phone || !order) throw new Error('Choose a driver and an order.');
+    const href = whatsappHref(driver.phone, orderBrief(order));
+    window.open(href, '_blank', 'noopener');
+    await updateDoc(doc(db, 'carrierShipments', order.id), {
+      assignedDriverId: driver.id,
+      assignedDriverName: driver.name || '',
+      assignedDriverPhone: driver.phone,
+      driverDispatchedAt: serverTimestamp(),
+    });
+  }
+  if (form.id === 'commissionForm') {
+    const amount = Math.round(Number(data.get('amount')) || 0);
+    const phone = String(data.get('phone') || '').trim();
+    const network = String(data.get('network') || '').trim();
+    const token = await state.user.getIdToken();
+    const base = (globalThis.DOORDROP_ADMIN_CONFIG?.apiBaseUrl || 'https://us-central1-efootball-app-9d175.cloudfunctions.net/api').replace(/\/+$/, '');
+    const response = await fetch(`${base}/carrier/commission/ussd`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, phoneNumber: phone, network }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'USSD was not sent. Try again.');
+    const note = document.getElementById('payNote');
+    if (note) note.textContent = payload.message || 'Check the phone for the USSD prompt.';
+    const orderId = payload.orderId;
+    if (orderId) {
+      setTimeout(async () => {
+        const verify = await fetch(`${base}/carrier/commission/verify`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId }),
+        });
+        const verified = await verify.json().catch(() => ({}));
+        if (note && verified.message) note.textContent = verified.message;
+        else if (note && verified.status === 'completed') note.textContent = 'Commission payment confirmed.';
+      }, 8000);
+    }
   }
   if (form.id === 'vehicleForm') {
     const id = await requireCarrier();
