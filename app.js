@@ -658,11 +658,32 @@ function authModeFromHash() {
   return '';
 }
 
+const LANDING_SECTIONS = new Set(['how', 'features', 'start', '']);
+
 function scrubLoggedOutHash() {
   if (state.user) return;
   if (authModeFromHash()) return;
   const raw = location.hash.replace(/^#\/?/, '').trim();
-  if (raw) location.replace('#/');
+  const page = raw.split('/')[0];
+  if (!raw || LANDING_SECTIONS.has(page)) return;
+  if (page === 'login' || page === 'register') return;
+  location.replace('#/');
+}
+
+function scrollToLandingSection(id) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  $('landing')?.classList.remove('hidden');
+  $('authCard')?.classList.add('hidden');
+  closePublicMenu();
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closePublicMenu() {
+  const menu = $('publicMenu');
+  const toggle = $('publicNavToggle');
+  if (menu) menu.hidden = true;
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
 }
 
 function stopHeroCarousel() {
@@ -901,10 +922,13 @@ function showPublic(authMode) {
   $('landing').classList.toggle('hidden', Boolean(authMode));
   $('authCard').classList.toggle('hidden', !authMode);
   if (!authMode) {
+    closePublicMenu();
     startHeroCarousel();
     return;
   }
   stopHeroCarousel();
+  closePublicMenu();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
   state.mode = authMode;
   const register = authMode === 'register';
   const loginBlock = $('loginFields');
@@ -2625,6 +2649,32 @@ function bindAuth() {
   $('quietLogin')?.addEventListener('click', () => open('login'));
   $('footerLogin')?.addEventListener('click', () => open('login'));
   $('footerRegister')?.addEventListener('click', () => open('register'));
+  $('startRegister')?.addEventListener('click', () => open('register'));
+  $('startLogin')?.addEventListener('click', () => open('login'));
+  $('menuLogin')?.addEventListener('click', () => { closePublicMenu(); open('login'); });
+  $('menuRegister')?.addEventListener('click', () => { closePublicMenu(); open('register'); });
+  $('authBackHome')?.addEventListener('click', () => {
+    clearAuthIntent();
+    location.hash = '#/';
+    showPublic('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  $('publicNavToggle')?.addEventListener('click', () => {
+    const menu = $('publicMenu');
+    if (!menu) return;
+    const openMenu = menu.hidden;
+    menu.hidden = !openMenu;
+    $('publicNavToggle')?.setAttribute('aria-expanded', openMenu ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-scroll]').forEach((el) => {
+    el.addEventListener('click', (event) => {
+      event.preventDefault();
+      const id = el.getAttribute('data-scroll');
+      if (!id) return;
+      if (state.user) return;
+      scrollToLandingSection(id);
+    });
+  });
   $('notesBtn')?.addEventListener('click', () => navigateApp('notifications'));
   $('authSwitch').onclick = () => open(state.mode === 'login' ? 'register' : 'login');
   $('forgotPassword')?.addEventListener('click', async () => {

@@ -3,74 +3,159 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0B1F17" />
-  <meta name="description" content="Haul Cargo Transporter Portal — register your transport company, choose operating regions, and manage cargo delivery orders." />
-  <title>Haul Cargo · Transporter Portal</title>
+  <meta name="theme-color" content="#F5E000" />
+  <meta name="description" content="HAUL Transporter Portal — register your transport company, choose operating regions, and manage cargo delivery orders across Tanzania." />
+  <title>HAUL · Transporter Portal</title>
   <link rel="icon" href="./assets/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20261028b" />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400;0,500;0,600;0,700;1,500;1,600&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css?v=20261028c" />
 </head>
 <body>
-  <div id="public">
-    <header class="public-nav">
-      <a class="mark" href="#/">
-        <img src="./assets/logo.svg" alt="" width="28" height="28" />
-        <span>Haul Cargo</span>
-      </a>
-      <div class="public-nav-actions">
-        <button class="btn link quiet" id="quietLogin" type="button">Login</button>
-        <button class="btn primary small" id="navRegister" type="button">Register</button>
-      </div>
+  <div id="public" class="site-public">
+    <div class="atmosphere" aria-hidden="true"></div>
+
+    <header class="top">
+      <a class="brand-mark" href="#/" aria-label="HAUL">HAUL</a>
+      <nav class="top-nav" aria-label="Primary">
+        <button class="top-link" type="button" data-scroll="how">How it works</button>
+        <button class="top-link" type="button" data-scroll="features">Features</button>
+        <button class="top-link" id="quietLogin" type="button">Login</button>
+        <button class="top-cta" id="navRegister" type="button">Register</button>
+      </nav>
+      <button class="nav-toggle" id="publicNavToggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="publicMenu">
+        <span></span><span></span>
+      </button>
     </header>
+    <div class="public-menu" id="publicMenu" hidden>
+      <button type="button" data-scroll="how">How it works</button>
+      <button type="button" data-scroll="features">Features</button>
+      <button type="button" id="menuLogin">Login</button>
+      <button type="button" class="top-cta" id="menuRegister">Register</button>
+    </div>
 
-    <section class="hero" id="landing">
-      <div class="hero-inner">
+    <div id="landing">
+      <section class="hero" aria-label="HAUL Transporter Portal">
         <div class="hero-copy">
-          <p class="eyebrow">Transporter Portal</p>
-          <h1>Haul Cargo</h1>
-          <p class="subline">Connect your transport company with verified cargo delivery orders across Tanzania. One dashboard for offers, acceptances, and live shipments.</p>
-          <div class="hero-cta">
-            <button class="btn primary" id="heroCta" type="button">Register Transport Company</button>
-            <button class="btn line" id="heroRegister" type="button">Login</button>
+          <h1 class="logo">HAUL</h1>
+          <p class="tagline">move what matters....</p>
+          <p class="lede">Transporter Portal for cargo companies across Tanzania.</p>
+          <div class="cta-row">
+            <button class="btn-ink" id="heroCta" type="button">
+              <span class="btn-label">Register company</span>
+              <span class="btn-meta">Start onboarding</span>
+            </button>
+            <button class="btn-outline" id="heroRegister" type="button">
+              <span class="btn-label">Login</span>
+              <span class="btn-meta">Company dashboard</span>
+            </button>
           </div>
         </div>
-        <div class="hero-visual" aria-hidden="true">
-          <div class="hero-panel">
-            <span class="hero-panel-label">Operating network</span>
-            <strong>Region-matched orders</strong>
-            <p>See only cargo you can move — based on the regions you select at registration.</p>
+      </section>
+
+      <nav class="section-nav" aria-label="On this page">
+        <a href="#how" data-scroll="how">01 How it works</a>
+        <a href="#features" data-scroll="features">02 Features</a>
+        <a href="#start" data-scroll="start">03 Get started</a>
+      </nav>
+
+      <section class="lp-band" id="how">
+        <div class="lp-wrap">
+          <p class="lp-kicker">How it works</p>
+          <h2 class="lp-title">Three steps to live cargo orders</h2>
+          <p class="lp-lead">Built for transport companies that need clear coverage, fast offers, and one place to run the job.</p>
+          <ol class="lp-steps">
+            <li>
+              <span class="lp-step-num">01</span>
+              <div>
+                <h3>Register your company</h3>
+                <p>Business email, notification phone, and company profile — then Haul verifies your account.</p>
+              </div>
+            </li>
+            <li>
+              <span class="lp-step-num">02</span>
+              <div>
+                <h3>Choose operating regions</h3>
+                <p>Serve all of Tanzania or pick exact regions. You only see orders that match your coverage.</p>
+              </div>
+            </li>
+            <li>
+              <span class="lp-step-num">03</span>
+              <div>
+                <h3>Accept and move cargo</h3>
+                <p>Review offers, accept eligible jobs, track in transit, and close completed deliveries.</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="lp-band lp-band-ink" id="features">
+        <div class="lp-wrap">
+          <p class="lp-kicker">Features</p>
+          <h2 class="lp-title">Only what your ops team needs</h2>
+          <p class="lp-lead">No clutter. The portal mirrors live Haul cargo data — same orders Agents already use.</p>
+          <ul class="lp-features">
+            <li>
+              <strong>Region-matched offers</strong>
+              <span>Orders filtered by your selected Tanzania regions or nationwide coverage.</span>
+            </li>
+            <li>
+              <strong>Available → accepted → transit</strong>
+              <span>Clear queues for new offers, active jobs, in-transit freight, and completed work.</span>
+            </li>
+            <li>
+              <strong>Order detail &amp; directions</strong>
+              <span>Cargo photos, pickup and drop-off, contacts when authorized, maps in one view.</span>
+            </li>
+            <li>
+              <strong>SMS + in-portal alerts</strong>
+              <span>Company phone notified on new eligible orders, with unread counts in the dashboard.</span>
+            </li>
+            <li>
+              <strong>Drivers &amp; vehicles</strong>
+              <span>Keep fleet and dispatcher contacts aligned with daily operations.</span>
+            </li>
+            <li>
+              <strong>Company profile</strong>
+              <span>Update regions, notification preferences, and verification documents anytime.</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="lp-band" id="start">
+        <div class="lp-wrap lp-start">
+          <p class="lp-kicker">Get started</p>
+          <h2 class="lp-title">Ready to move with HAUL?</h2>
+          <p class="lp-lead">Register your transport company, set coverage, and open the dashboard.</p>
+          <div class="cta-row cta-row-start">
+            <button class="btn-ink" id="startRegister" type="button">
+              <span class="btn-label">Register Transport Company</span>
+              <span class="btn-meta">Free to apply</span>
+            </button>
+            <button class="btn-outline" id="startLogin" type="button">
+              <span class="btn-label">Login</span>
+              <span class="btn-meta">Existing partners</span>
+            </button>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="home-strip">
-      <article>
-        <h2>Register</h2>
-        <p>Create a company account with your business email and notification phone.</p>
-      </article>
-      <article>
-        <h2>Choose regions</h2>
-        <p>Serve all of Tanzania or pick specific regions such as Dar es Salaam, Arusha, and Mwanza.</p>
-      </article>
-      <article>
-        <h2>Manage orders</h2>
-        <p>Accept eligible cargo, track in transit, and keep your team aligned from one portal.</p>
-      </article>
-    </section>
-
-    <footer class="public-footer">
-      <span>© Haul Cargo</span>
-      <span class="footer-dot" aria-hidden="true">·</span>
-      <button class="btn link quiet" id="footerLogin" type="button">Login</button>
-      <span class="footer-dot" aria-hidden="true">·</span>
-      <button class="btn link quiet" id="footerRegister" type="button">Register Transport Company</button>
-    </footer>
+      <footer class="lp-footer">
+        <span class="brand-mark compact">HAUL</span>
+        <span class="footer-meta">Transporter Portal</span>
+        <span class="footer-dot" aria-hidden="true">·</span>
+        <button class="top-link" id="footerLogin" type="button">Login</button>
+        <span class="footer-dot" aria-hidden="true">·</span>
+        <button class="top-link" id="footerRegister" type="button">Register</button>
+      </footer>
+    </div>
 
     <section class="auth-shell hidden" id="authCard">
       <div class="auth-panel">
+        <button class="auth-back" id="authBackHome" type="button">← Back to home</button>
         <h2 id="authTitle">Login</h2>
         <p class="auth-lead" id="authLead">Open your company dashboard.</p>
         <form id="authForm">
@@ -105,7 +190,7 @@
                   <input type="checkbox" name="coverageAllTanzania" id="coverageAllTanzania" value="1" />
                   <span>All Tanzania regions</span>
                 </label>
-                <p class="muted">If unchecked, select one or more regions below. Leave blank only when “All Tanzania” is selected.</p>
+                <p class="muted">If unchecked, select one or more regions below.</p>
                 <div class="region-grid" id="coverageRegionGrid"></div>
               </fieldset>
               <div class="reg-nav">
@@ -128,7 +213,7 @@
               </div>
               <label class="check-row terms-row">
                 <input type="checkbox" name="termsAccepted" id="termsAccepted" value="1" required />
-                <span>I accept the Haul Cargo terms and conditions for transporter partners.</span>
+                <span>I accept the HAUL terms and conditions for transporter partners.</span>
               </label>
               <div class="reg-nav">
                 <button class="btn ghost reg-back" type="button" data-reg-back="2">Back</button>
@@ -161,8 +246,7 @@
       <aside class="sidebar" id="sidebar">
         <div class="side-head">
           <a class="mark" href="#/overview">
-            <img src="./assets/logo.svg" alt="" width="28" height="28" />
-            <span>Haul Cargo</span>
+            <span class="brand-mark compact">HAUL</span>
           </a>
           <button class="nav-close" id="navClose" type="button" aria-label="Close menu">×</button>
         </div>
@@ -190,6 +274,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=20261028b"></script>
+  <script type="module" src="./app.js?v=20261028c"></script>
 </body>
 </html>
