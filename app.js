@@ -31,7 +31,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js';
 
 const ADMIN_EMAIL = 'boyzeus11@gmail.com';
-const HAUL_FEE_RATE = 0.2;
+const HAUL_FEE_RATE = 0.12;
 const OFFER_MS = 5 * 60 * 1000;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const FLOW = ['new', 'matching', 'assigned', 'accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus', 'in_transit', 'arrived', 'delivered'];
@@ -1011,6 +1011,7 @@ const NAV = [
   ['history', 'History'],
   ['drivers', 'Drivers'],
   ['finance', 'Finance'],
+  ['levels', 'Levels'],
   ['profile', 'Company Profile'],
   ['settings', 'Settings'],
 ];
@@ -1042,6 +1043,7 @@ const FOLDED = {
   history: 'history',
   drivers: 'drivers',
   finance: 'finance',
+  levels: 'levels',
   uthibitisho: 'overview',
   desk: 'finance',
 };
@@ -1145,7 +1147,12 @@ async function loadSession(user) {
   if (authHash || location.hash === '#/' || !rawHash) {
     location.replace('#/overview');
   }
-  $('companyLabel').textContent = state.carrier?.companyName || (state.isAdmin ? 'Haul Desk' : 'Company');
+  const companyName = state.carrier?.companyName || (state.isAdmin ? 'Haul Desk' : 'Company');
+  $('companyLabel').textContent = companyName;
+  const avatar = $('companyAvatar');
+  if (avatar) {
+    avatar.textContent = companyName.split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || 'H';
+  }
   const statusEl = $('statusLabel');
   const statusText = state.isAdmin && !state.carrier ? 'Admin' : carrierStatusLabel(state.carrier?.status);
   statusEl.textContent = statusText;
@@ -1228,11 +1235,15 @@ function dashboard() {
   const rows = state.shipments.filter(mine);
   const offers = rows.filter((item) => item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id);
   const accepted = rows.filter((item) => item.carrierId === state.carrier?.id && ['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus'].includes(item.shipmentStatus));
-  const transit = rows.filter((item) => item.carrierId === state.carrier?.id && ['in_transit', 'arrived'].includes(item.shipmentStatus));
+  const transit = rows.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'in_transit');
   const completed = rows.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'delivered');
+  const initials = company.split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || 'H';
   const welcome = `<section class="welcome-banner">
-    <h2>Welcome, ${esc(company)}</h2>
-    <p>Manage available cargo offers and live shipments from your Haul Cargo dashboard.</p>
+    <span class="co-avatar lg" aria-hidden="true">${esc(initials)}</span>
+    <div>
+      <h2>Welcome, ${esc(company)}</h2>
+      <p>Live cargo for your regions. Accept offers, dispatch drivers, and track what is actually on the road.</p>
+    </div>
   </section>
   <div class="finance-row">
     <article class="stat"><span>New offers</span><strong>${offers.length}</strong></article>
@@ -1285,17 +1296,17 @@ function availableOrdersPage() {
 
 function historyPage() {
   const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
-  const completed = owned.filter((item) => item.shipmentStatus === 'delivered');
-  const accepted = owned.filter((item) => ['accepted', 'contacted', 'pickup_scheduled', 'picked_up'].includes(item.shipmentStatus));
-  const transit = owned.filter((item) => ['in_transit', 'arrived', 'at_bus'].includes(item.shipmentStatus));
+  const completed = owned.filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived');
+  const accepted = owned.filter((item) => ['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus'].includes(item.shipmentStatus));
+  const transit = owned.filter((item) => item.shipmentStatus === 'in_transit');
   const declined = state.shipments.filter((item) => Array.isArray(item.declinedCarrierIds) && item.declinedCarrierIds.includes(state.carrier?.id));
   const block = (title, rows) => `<section class="panel"><div class="section-head"><h2>${title}</h2><span class="muted">${rows.length}</span></div>${ordersTable(rows, false)}</section>`;
   return `${block('Completed orders', completed)}${block('Accepted', accepted)}${block('In transit', transit)}${declined.length ? block('Declined', declined) : ''}`;
 }
 
 function transitOrdersPage() {
-  const rows = state.shipments.filter((item) => item.carrierId === state.carrier?.id && ['in_transit', 'arrived', 'at_bus'].includes(item.shipmentStatus));
-  return `<section class="panel"><div class="section-head"><h2>In Transit</h2></div>${ordersTable(rows, false)}</section>`;
+  const rows = state.shipments.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'in_transit');
+  return `<section class="panel"><div class="section-head"><h2>In Transit</h2><span class="muted">On the road only</span></div>${ordersTable(rows, false)}</section>`;
 }
 
 function orderBrief(item) {
@@ -1349,10 +1360,10 @@ function driversPage() {
 }
 
 const TIER_RULES = [
-  { id: 'bronze', label: 'Bronze', minStreak: 0, feePercent: 20, priority: 'Standard offers', payCeilingTzs: 30000 },
-  { id: 'silver', label: 'Silver', minStreak: 100, feePercent: 18, priority: 'Slight priority', payCeilingTzs: 60000 },
-  { id: 'gold', label: 'Gold', minStreak: 250, feePercent: 17, priority: 'Higher priority', payCeilingTzs: 100000 },
-  { id: 'platinum', label: 'Platinum', minStreak: 500, feePercent: 15, priority: 'Top priority', payCeilingTzs: 150000 },
+  { id: 'bronze', label: 'Bronze', minStreak: 0, feePercent: 12, priority: 'Standard offer flow', payCeilingTzs: 30000, note: 'Starting level. Commission is 12% on completed cargo.' },
+  { id: 'silver', label: 'Silver', minStreak: 100, feePercent: 10, priority: 'Slight matching priority', payCeilingTzs: 60000, note: '100 finished jobs in a row. Commission drops to 10%.' },
+  { id: 'gold', label: 'Gold', minStreak: 250, feePercent: 8, priority: 'Higher matching priority', payCeilingTzs: 100000, note: '250 finished jobs in a row. Commission drops to 8%.' },
+  { id: 'platinum', label: 'Platinum', minStreak: 500, feePercent: 6, priority: 'Top matching priority', payCeilingTzs: 150000, note: '500 finished jobs in a row. Commission is 6%.' },
 ];
 
 function companyStanding() {
@@ -1393,7 +1404,7 @@ function companyStanding() {
     postAcceptCancels,
     cancelPercent: Math.round(cancelRate * 100),
     closure,
-    feePercent: punished ? 20 : tier.feePercent,
+    feePercent: punished ? 15 : tier.feePercent,
     tier,
     next,
     unpaid,
@@ -1417,12 +1428,16 @@ function financePage() {
     : '';
   return `${notice}
   <section class="panel tier-card tier-${esc(standing.tier.id)}">
-    <p class="lp-kicker">Account level</p>
-    <h2>${esc(standing.tier.label)}</h2>
-    <p>Commission ${standing.feePercent}% · ${esc(standing.tier.priority)}</p>
-    <p class="muted">Streak ${standing.streak} · Next: ${esc(next)} · Cancels ${standing.cancelPercent}%</p>
+    <div class="level-row">
+      <span class="co-avatar lg" aria-hidden="true">${esc(standing.tier.label.slice(0, 1))}</span>
+      <div>
+        <p class="lp-kicker">Account level</p>
+        <h2>${esc(standing.tier.label)}</h2>
+        <p class="muted">Streak ${standing.streak}${standing.next ? ` · ${esc(next)}` : ''}</p>
+      </div>
+    </div>
     <div class="tier-bar"><span style="width:${progress}%"></span></div>
-    <div class="tier-ladder">${TIER_RULES.map((rule) => `<span class="${rule.id === standing.tier.id ? 'on' : ''}">${esc(rule.label)} ${rule.feePercent}% · ceiling ${money(rule.payCeilingTzs)}</span>`).join('')}</div>
+    <button class="btn line small" data-go="levels" type="button">Level benefits</button>
   </section>
   <div class="finance-row">
     <article class="stat"><span>Unpaid commission</span><strong>${money(standing.unpaid)}</strong></article>
@@ -1451,6 +1466,23 @@ function financePage() {
       return `<p><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong> · fee ${money(fee)} · paid ${money(paid)} · due ${money(Math.max(0, fee - paid))}</p>`;
     }).join('') || '<p class="empty">Completed shipments will show commission here.</p>'}
   </section>`;
+}
+
+function levelsPage() {
+  const standing = companyStanding();
+  return `<section class="panel">
+    <p class="lp-kicker">Levels</p>
+    <h2>How commission and benefits work</h2>
+    <p class="muted">A reject or cancel resets the streak. If cancels stay high, commission returns to 15% and new offers can pause.</p>
+  </section>
+  <div class="level-grid">${TIER_RULES.map((rule) => `<article class="panel tier-card tier-${esc(rule.id)} ${rule.id === standing.tier.id ? 'is-current' : ''}">
+    <span class="co-avatar" aria-hidden="true">${esc(rule.label.slice(0, 1))}</span>
+    <h3>${esc(rule.label)}</h3>
+    <p class="level-fee">${rule.feePercent}%</p>
+    <p>${esc(rule.note)}</p>
+    <p class="muted">${esc(rule.priority)} · unpaid ceiling ${money(rule.payCeilingTzs)}</p>
+    ${rule.id === standing.tier.id ? '<p class="level-now">Your level</p>' : ''}
+  </article>`).join('')}</div>`;
 }
 
 function orderRow(item) {
@@ -2251,6 +2283,7 @@ async function render() {
     history: 'History',
     drivers: 'Drivers',
     finance: 'Finance',
+    levels: 'Levels',
     notifications: 'Notifications',
     profile: 'Company Profile',
     trips: 'Drivers & Vehicles',
@@ -2284,6 +2317,7 @@ async function render() {
   else if (page === 'transit') html = transitOrdersPage();
   else if (page === 'drivers' || page === 'trips' || page === 'vehicles') html = driversPage();
   else if (page === 'finance' || page === 'payments' || page === 'fares' || page === 'reports') html = financePage();
+  else if (page === 'levels') html = levelsPage();
   else if (page === 'notifications') html = companyPages();
   else if (page === 'profile' || page === 'verification' || page === 'staff') html = companyPages();
   else if (page === 'routes') html = routesPage();
