@@ -1006,7 +1006,7 @@ function navButton(page, label) {
 
 const NAV = [
   ['overview', 'Dashboard'],
-  ['available', 'Available Orders'],
+  ['orders', 'Orders'],
   ['transit', 'In Transit'],
   ['history', 'History'],
   ['drivers', 'Drivers'],
@@ -1017,8 +1017,8 @@ const NAV = [
 ];
 const FOLDED = {
   dashboard: 'overview',
-  orders: 'available',
-  assignments: 'available',
+  assignments: 'orders',
+  available: 'orders',
   manifest: 'history',
   mizigo: 'history',
   mine: 'history',
@@ -1270,7 +1270,9 @@ function ordersTable(rows, showAccept) {
       const photos = Array.isArray(item.cargoPhotos) ? item.cargoPhotos : (item.photoUrls || item.images || []);
       const photoCount = Array.isArray(photos) ? photos.length : (item.parcelPhotoUrl ? 1 : 0);
       const actions = showAccept && item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id
-        ? `<button class="btn primary small" data-act="accept" data-id="${esc(item.id)}" type="button">Accept</button>
+        ? `${item.transporterVerifiedAt
+          ? `<button class="btn primary small" data-act="accept" data-id="${esc(item.id)}" type="button">Accept</button>`
+          : `<button class="btn primary small" data-act="verify" data-id="${esc(item.id)}" type="button">Verify</button>`}
            <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a>`
         : `<a class="btn primary small" href="#/assignment/${esc(item.id)}">Open</a>`;
       return `<tr>
@@ -1285,6 +1287,80 @@ function ordersTable(rows, showAccept) {
         <td class="actions">${actions}</td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
+}
+
+const ORDER_TABS = [
+  ['new', 'New Orders'],
+  ['verified', 'Verified'],
+  ['transit', 'In Transit'],
+  ['delivered', 'Delivered'],
+  ['cancelled', 'Cancelled'],
+];
+
+function orderBucket(item) {
+  const mineId = state.carrier?.id;
+  const status = String(item.shipmentStatus || '');
+  const declined = Array.isArray(item.declinedCarrierIds) && item.declinedCarrierIds.includes(mineId);
+  if (status === 'cancelled' || (declined && item.carrierId !== mineId && item.offeredCarrierId !== mineId)) return 'cancelled';
+  if (status === 'delivered') return 'delivered';
+  if (status === 'in_transit' || ['at_checkpoint', 'near_destination'].includes(item.journeyStatus)) return 'transit';
+  if (item.carrierId === mineId || item.transporterVerifiedAt) return 'verified';
+  if (status === 'assigned' && item.offeredCarrierId === mineId) return 'new';
+  return '';
+}
+
+function orderActions(item) {
+  const bucket = orderBucket(item);
+  const id = esc(item.id);
+  if (bucket === 'new') return `<button class="btn primary small" data-act="verify" data-id="${id}" type="button">Verify order</button>`;
+  if (bucket === 'verified' && !item.carrierId) return `<button class="btn primary small" data-act="accept" data-id="${id}" type="button">Accept</button>`;
+  if (bucket === 'verified') return `<button class="btn primary small" data-act="start-transit" data-id="${id}" type="button">Start journey</button>`;
+  if (bucket === 'transit') {
+    return `<button class="btn primary small" data-act="journey" data-id="${id}" type="button">Update journey</button>
+      <button class="btn line small" data-act="tracking-link" data-id="${id}" type="button">Send tracking link</button>
+      <button class="btn line small" data-act="deliver" data-id="${id}" type="button">Mark delivered</button>`;
+  }
+  return `<a class="btn line small" href="#/assignment/${id}">Open</a>`;
+}
+
+function ordersDesk(tab) {
+  const current = ORDER_TABS.some(([key]) => key === tab) ? tab : 'new';
+  const rows = state.shipments.filter((item) => orderBucket(item) === current);
+  const tabs = ORDER_TABS.map(([key, label]) => {
+    const count = state.shipments.filter((item) => orderBucket(item) === key).length;
+    return `<a class="order-tab ${key === current ? 'on' : ''}" href="#/orders/${key}">${label} <em>${count}</em></a>`;
+  }).join('');
+  const body = rows.length
+    ? `<div class="order-list">${rows.map((item) => {
+        const latest = item.latestJourney || {};
+        return `<article class="panel order-card">
+          <header><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>${badge(item.journeyStatus || item.shipmentStatus)}</header>
+          <p>${esc(item.customerName || 'Customer')} · ${esc(item.customerPhone || 'No phone')}</p>
+          <p>${esc(item.pickupLabel || item.origin || 'Pickup')} → ${esc(item.destination || 'Destination')}</p>
+          <p class="muted">${esc(item.parcelDescription || 'Cargo')} · value ${money(item.declaredValueTzs || 0)} · fee ${money(priceOf(item))}</p>
+          <p class="muted">Latest: ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(latest.at)}` : ''}${latest.locationSource === 'manual' ? ' · manual location' : ''}</p>
+          <div class="actions">${orderActions(item)} <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a></div>
+        </article>`;
+      }).join('')}</div>`
+    : '<p class="empty">No orders in this tab.</p>';
+  return `<div class="order-tabs">${tabs}</div>${body}`;
+}
+
+async function portalCall(path, body) {
+  const token = await state.user.getIdToken();
+  const base = (globalThis.DOORDROP_ADMIN_CONFIG?.apiBaseUrl || 'https://us-central1-efootball-app-9d175.cloudfunctions.net/api').replace(/\/+$/, '');
+  const response = await fetch(`${base}${path}`, {
+    method: body ? 'POST' : 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Request failed.');
+  return payload;
 }
 
 function availableOrdersPage() {
@@ -1434,6 +1510,8 @@ function financePage() {
         <p class="lp-kicker">Account level</p>
         <h2>${esc(standing.tier.label)}</h2>
         <p class="muted">Streak ${standing.streak}${standing.next ? ` · ${esc(next)}` : ''}</p>
+        <p>${standing.blocked ? 'Limit Reached — Orders Paused' : standing.unpaid >= standing.ceiling * 0.8 ? 'Approaching Commission Limit' : 'Eligible to Receive Orders'}</p>
+        <p class="muted">Threshold ${money(standing.ceiling)} · outstanding ${money(standing.unpaid)} · room ${money(Math.max(0, standing.ceiling - standing.unpaid))}</p>
       </div>
     </div>
     <div class="tier-bar"><span style="width:${progress}%"></span></div>
@@ -1546,7 +1624,7 @@ function assignmentPage(id) {
     ${offered ? offerCountdownBlock(item) : ''}
     ${orderFacts(item)}
     <div class="actions" style="margin-top:14px">
-      ${offered ? `<button class="btn primary" data-act="accept" data-id="${esc(item.id)}" type="button">Accept order</button><button class="btn line" data-act="reject" data-id="${esc(item.id)}" type="button">Decline</button>` : ''}
+      ${offered ? `${item.transporterVerifiedAt ? `<button class="btn primary" data-act="accept" data-id="${esc(item.id)}" type="button">Accept order</button>` : `<button class="btn primary" data-act="verify" data-id="${esc(item.id)}" type="button">Verify order</button>`}<button class="btn line" data-act="reject" data-id="${esc(item.id)}" type="button">Decline</button>` : ''}
       ${owned ? `<a class="btn primary" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
       <a class="btn line" href="${destMap}" target="_blank" rel="noopener">Directions</a>
     </div>
@@ -2278,7 +2356,8 @@ async function render() {
   renderNav();
   const titles = {
     overview: 'Dashboard',
-    available: 'Available Orders',
+    orders: 'Orders',
+    available: 'Orders',
     transit: 'In Transit',
     history: 'History',
     drivers: 'Drivers',
@@ -2312,7 +2391,7 @@ async function render() {
   } else if (!state.carrier && state.isAdmin && (page === 'overview' || page === 'dashboard')) {
     html = `<p class="page-lead">Welcome to the Haul desk.</p><p class="empty">Use the menu for orders, verification, or desk tools.</p>`;
   } else if (page === 'overview' || page === 'dashboard') html = dashboard();
-  else if (page === 'available' || page === 'orders' || page === 'assignments') html = availableOrdersPage();
+  else if (page === 'orders' || page === 'available' || page === 'assignments') html = ordersDesk(id || 'new');
   else if (page === 'history' || page === 'mine' || page === 'manifest' || page === 'mizigo' || page === 'completed' || page === 'historia') html = historyPage();
   else if (page === 'transit') html = transitOrdersPage();
   else if (page === 'drivers' || page === 'trips' || page === 'vehicles') html = driversPage();
@@ -2550,7 +2629,40 @@ async function onViewClick(event) {
   const snap = await getDoc(ref);
   if (!snap.exists() || !mine({ id, ...snap.data() })) return;
   const current = snap.data();
-  if (act === 'accept') {
+  if (act === 'verify' || act === 'accept' || act === 'start-transit' || act === 'tracking-link' || act === 'deliver') {
+    const path = {
+      verify: '/carrier/portal/verify',
+      accept: '/carrier/portal/accept',
+      'start-transit': '/carrier/portal/transit',
+      'tracking-link': '/carrier/portal/tracking-link',
+      deliver: '/carrier/portal/deliver',
+    }[act];
+    const payload = await portalCall(path, { shipmentId: id, locationName: act === 'deliver' ? 'Delivered' : undefined });
+    const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
+    if (note) window.alert(note);
+    return;
+  }
+  if (act === 'journey') {
+    const message = window.prompt('Journey update');
+    if (!message) return;
+    const place = window.prompt('Place name. Leave blank only if you will paste GPS as lat,lng next.') || '';
+    const gps = window.prompt('GPS as latitude,longitude — or leave blank for a manual place') || '';
+    const [lat, lng] = gps.split(',').map((part) => part.trim());
+    const status = window.prompt('Status: in_transit, at_checkpoint, or near_destination', 'in_transit') || 'in_transit';
+    const eta = window.prompt('ETA, if you have one') || '';
+    await portalCall('/carrier/portal/journey', {
+      shipmentId: id,
+      status,
+      message,
+      locationName: place,
+      latitude: lat || undefined,
+      longitude: lng || undefined,
+      locationSource: lat && lng ? 'gps' : 'manual',
+      eta,
+    });
+    return;
+  }
+  if (act === 'accept-legacy') {
     if (current.offeredCarrierId !== state.carrier.id) return;
     await updateDoc(ref, {
       carrierId: state.carrier.id,

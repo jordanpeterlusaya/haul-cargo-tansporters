@@ -1419,6 +1419,21 @@ body:has(#app:not(.hidden)) {
   letter-spacing: -0.04em;
 }
 .level-now { font-weight: 700; margin-top: 0.6rem; }
+.order-tabs { display: flex; gap: 0.4rem; overflow: auto; margin-bottom: 1rem; }
+.order-tab {
+  flex: 0 0 auto;
+  border: 1px solid rgba(17, 17, 17, 0.12);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: #fff;
+  font-weight: 650;
+  font-size: 0.86rem;
+}
+.order-tab.on { background: #111; color: #f5e000; }
+.order-tab em { font-style: normal; opacity: 0.7; }
+.order-list { display: grid; gap: 0.8rem; }
+.order-card header { display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; }
+.order-card p { margin: 0.35rem 0 0; }
 .tier-card.is-current { outline: 2px solid #111; }
 @media (prefers-reduced-motion: reduce) {
   #view .panel { animation: none; }
