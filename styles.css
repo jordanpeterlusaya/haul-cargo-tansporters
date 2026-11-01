@@ -1788,6 +1788,7 @@ body:has(#app:not(.hidden)) {
 }
 #app .price-quote-panel.is-sent,
 #app .price-quote-panel.is-confirmed { background: var(--haul-soft); border-color: #d7eadc; }
+#app .price-quote-panel.is-declined { background: #fdecec; border-color: #f3c7c7; }
 #app .quote-editor-title { font-size: 13px; font-weight: 680; }
 #app .price-quote-panel input {
   font-size: 15px;

@@ -128,6 +128,8 @@ const state = {
   deskTo: '',
   deskFocus: '',
   stageBusy: '',
+  stageBusyIds: {},
+  pendingStages: {},
 };
 
 let countdownTimer = null;
@@ -1210,11 +1212,20 @@ function listen() {
   const publishShipments = () => {
     const map = new Map();
     [...buckets.offered, ...buckets.owned].forEach((item) => map.set(item.id, item));
-    state.shipments = [...map.values()];
+    state.shipments = [...map.values()].map((item) => {
+      const pending = state.pendingStages[item.id];
+      if (!pending) return item;
+      if (item.shipmentStatus === pending.shipmentStatus && String(item.trackStep || '') === String(pending.trackStep || '')) {
+        delete state.pendingStages[item.id];
+        delete state.stageBusyIds[item.id];
+        return item;
+      }
+      return { ...item, ...pending, stagePending: true };
+    });
   };
-  const watch = (q, apply) => state.unsubscribers.push(onSnapshot(q, (snap) => {
+  const watch = (q, apply, paint = true) => state.unsubscribers.push(onSnapshot(q, (snap) => {
     apply(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
-    render();
+    if (paint) scheduleRender();
   }));
   watch(query(collection(db, 'carrierShipments'), where('offeredCarrierId', '==', id)), (rows) => {
     const incoming = rows.filter((item) => item.shipmentStatus === 'assigned' && !state.knownOfferIds?.has(item.id));
@@ -1251,7 +1262,8 @@ function listen() {
       });
     }
     state.notesReady = true;
-  });
+    if (route().page === 'notifications') scheduleRender();
+  }, false);
 }
 
 let presenceTimer = null;
@@ -1477,8 +1489,8 @@ async function enableOfferNotifications() {
   }
 }
 
-function statusUploadPanel(item) {
-  return stageAction(item);
+function statusUploadPanel() {
+  return '';
 }
 
 function offerHeroCard(item) {
@@ -1839,15 +1851,22 @@ function needsCustomerPrice(item) {
 }
 
 function quotePanel(item, opts = {}) {
-  if (['cancelled', 'delivered'].includes(String(item.shipmentStatus || ''))) return '';
   const qs = String(item.quoteStatus || '').trim();
+  const declined = qs === 'declined' || /declined the company price/i.test(String(item.cancelReason || ''));
+  if (declined) {
+    return `<div class="price-quote-panel is-declined">
+      <p class="quote-editor-title">Mteja amekataa bei</p>
+      <p>${priceOf(item) > 0 ? `<strong>${money(priceOf(item))}</strong>` : 'Bei imekataliwa.'}</p>
+    </div>`;
+  }
+  if (['cancelled', 'delivered'].includes(String(item.shipmentStatus || ''))) return '';
   const force = Boolean(opts.force) || needsCustomerPrice(item);
   const editing = Boolean(opts.editing) || state.editingQuoteId === item.id;
   if (qs === 'confirmed' && priceOf(item) > 0 && !editing) {
     const fee = Math.round(Number(item.haulFee) || 0);
     return `<div class="price-quote-panel is-confirmed">
       <p class="quote-editor-title">Bei ya mzigo</p>
-      <p><strong>${money(priceOf(item))}</strong> · mteja amethibitisha.${fee > 0 ? ` Commission ${money(fee)}.` : ''}</p>
+      <p><strong>${money(priceOf(item))}</strong> · mteja amekubali.${fee > 0 ? ` Commission ${money(fee)}.` : ''}</p>
     </div>`;
   }
 
@@ -1856,7 +1875,7 @@ function quotePanel(item, opts = {}) {
     return `<div class="price-quote-panel is-sent">
       <p class="quote-editor-title">Bei imetumwa kwa mtumaji</p>
       <p><strong>${money(priceOf(item))}</strong></p>
-      <p class="muted quote-hint">${draft > 0 ? `Commission draft ${money(draft)} · inahesabiwa unapochukua oda.` : 'Inasubiri mteja kuthibitisha kwenye app.'}</p>
+      <p class="muted quote-hint">${draft > 0 ? `Commission draft ${money(draft)}.` : ''} Inasubiri mteja kukubali au kukataa.</p>
       <button class="btn line small" type="button" data-edit-quote="${esc(item.id)}">Badilisha bei</button>
     </div>`;
   }
@@ -1868,7 +1887,7 @@ function quotePanel(item, opts = {}) {
   const seedFee = seed ? Math.round(seed * (rate / 100)) : '';
   return `<form class="quote-form quote-form-stack price-quote-panel" data-quote="${esc(item.id)}">
     <p class="quote-editor-title">Weka bei ya kutuma mzigo</p>
-    <p class="muted quote-hint">Andika bei ya usafirishaji. Mtumaji ataiona kwenye app ya Haul na atathibitisha au kukataa.</p>
+    <p class="muted quote-hint">Andika bei ya usafirishaji. Mtumaji ataiona kwenye app na ataweza kukubali au kukataa.</p>
     <label>Bei ya usafirishaji (TZS)
       <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="mfano 25000" required autofocus />
     </label>
@@ -1932,18 +1951,15 @@ function stageAction(item) {
 }
 
 function stageButton(item) {
-  const bucket = orderBucket(item);
+  const qs = String(item.quoteStatus || '').trim();
   const id = esc(item.id);
-  const busy = state.stageBusy === item.id ? 'disabled' : '';
-  if (bucket === 'new') return `<button class="btn primary small" type="button" data-act="accept" data-id="${id}" ${busy}>${stageIcon('verified')} Verify order</button>`;
-  if (bucket === 'verified') {
-    const quote = String(item.quoteStatus || '');
-    if (quote && quote !== 'confirmed') return '<span class="attn">Awaiting price</span>';
-    return `<button class="btn primary small" type="button" data-act="start-transit" data-id="${id}" ${busy}>${stageIcon('transit')} Start delivery</button>`;
-  }
-  if (bucket === 'transit') return `<button class="btn primary small" type="button" data-act="deliver" data-id="${id}" ${busy}>${stageIcon('delivered')} Mark as delivered</button>`;
-  if (bucket === 'delivered') return '<span class="badge stage-delivered">Delivery completed</span>';
-  return '';
+  const status = String(item.shipmentStatus || '');
+  if (qs === 'confirmed') return '<span class="badge stage-verified">Mteja amekubali</span>';
+  if (qs === 'declined' || /declined the company price/i.test(String(item.cancelReason || ''))) return '<span class="badge stage-cancelled">Mteja amekataa</span>';
+  if (status === 'cancelled') return '<span class="badge stage-cancelled">Cancelled</span>';
+  if (qs === 'offered' && priceOf(item) > 0) return '<span class="attn">Inasubiri mteja</span>';
+  if (status === 'delivered' || orderBucket(item) === 'delivered') return '';
+  return `<button class="btn primary small" type="button" data-desk="open" data-id="${id}">Weka bei</button>`;
 }
 
 function orderActions() {
@@ -2060,6 +2076,13 @@ async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
       amountTzs: amount,
       commissionTzs: draftCommission,
     });
+    const sent = state.shipments.find((item) => item.id === shipmentId);
+    if (sent) {
+      sent.quoteStatus = 'offered';
+      sent.cashExpected = amount;
+      sent.quoteDraftCommissionTzs = draftCommission;
+      sent.fareLabel = label;
+    }
     return;
   } catch (error) {
     const message = String(error?.message || '');
@@ -2085,6 +2108,13 @@ async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
     totalLabel: label,
     updatedAt: serverTimestamp(),
   }, { merge: true });
+  const sent = state.shipments.find((item) => item.id === shipmentId);
+  if (sent) {
+    sent.quoteStatus = 'offered';
+    sent.cashExpected = amount;
+    sent.quoteDraftCommissionTzs = draftCommission;
+    sent.fareLabel = label;
+  }
 }
 
 async function portalCall(path, body) {
@@ -3183,6 +3213,10 @@ async function deskPage() {
       <button class="btn black" type="submit">Assign</button>
     </form>
   </section>`;
+}
+
+function scheduleRender() {
+  render();
 }
 
 async function render() {
