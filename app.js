@@ -120,6 +120,14 @@ const state = {
   needsCompanySetup: false,
   unsubscribers: [],
   editingQuoteId: null,
+  deskOpen: '',
+  deskPage: 1,
+  deskTab: '',
+  deskQuery: '',
+  deskFrom: '',
+  deskTo: '',
+  deskFocus: '',
+  stageBusy: '',
 };
 
 let countdownTimer = null;
@@ -1107,8 +1115,21 @@ function showCompanySetup() {
   initRegionControls();
 }
 
+const NAV_ICON = {
+  overview: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  orders: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+  transit: '<path d="M3 7h11v8H3z"/><path d="M14 10h4l3 3v2h-7z"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>',
+  history: '<circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/>',
+  drivers: '<circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.2"/><path d="M16 19a4 4 0 0 1 4.5-3.5"/>',
+  finance: '<path d="M4 7h16v12H4z"/><path d="M4 11h16"/><path d="M8 15h4"/>',
+  levels: '<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',
+  profile: '<circle cx="12" cy="8" r="3"/><path d="M5 19a7 7 0 0 1 14 0"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/>',
+};
+
 function navButton(page, label) {
-  return `<button class="side-link ${navActive(page)}" data-go="${page}" type="button">${label}</button>`;
+  const icon = NAV_ICON[page] || NAV_ICON.orders;
+  return `<button class="side-link ${navActive(page)}" data-go="${page}" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span></button>`;
 }
 
 const NAV = [
@@ -1165,7 +1186,9 @@ function navActive(page) {
 }
 
 function renderNav() {
-  $('nav').innerHTML = NAV.map(([page, label]) => navButton(page, label)).join('');
+  const ops = NAV.slice(0, 4).map(([page, label]) => navButton(page, label)).join('');
+  const company = NAV.slice(4).map(([page, label]) => navButton(page, label)).join('');
+  $('nav').innerHTML = `<p class="nav-label">Operations</p>${ops}<p class="nav-label">Company</p>${company}`;
 }
 
 function listen() {
@@ -1352,7 +1375,7 @@ function shipmentRows(rows) {
       <td>${esc(item.routeLabel || item.destination || '—')}</td>
       <td>${esc(item.customerName || '—')}<br><span class="muted">${esc(item.customerPhone || '')}</span></td>
       <td>${money(item.cashExpected)}</td>
-      <td>${badge(item.shipmentStatus)}</td>
+      <td>${stageBadge(item)}</td>
     </tr>`).join('')}</tbody></table></div>`;
 }
 
@@ -1455,25 +1478,7 @@ async function enableOfferNotifications() {
 }
 
 function statusUploadPanel(item) {
-  if (!item || item.carrierId !== state.carrier?.id) return '';
-  if (['cancelled'].includes(String(item.shipmentStatus || ''))) return '';
-  const steps = [
-    { key: 'pickup', status: 'contacted', label: 'Tunafuata' },
-    { key: 'packed', status: 'picked_up', label: 'Imepokelewa' },
-    { key: 'transit', status: 'in_transit', label: 'Imetumwa' },
-    { key: 'arrived', status: 'arrived', label: 'Imefika' },
-    { key: 'handed', status: 'delivered', label: 'Imekabidhiwa' },
-  ];
-  const current = String(item.trackStep || '');
-  const buttons = steps.map((step) => {
-    const on = current === step.key || item.shipmentStatus === step.status;
-    return `<button class="btn ${on ? 'primary' : 'line'} small" type="button" data-act="set-status" data-step="${step.key}" data-status="${step.status}" data-label="${esc(step.label)}" data-id="${esc(item.id)}">${esc(step.label)}</button>`;
-  }).join('');
-  return `<div class="price-quote-panel status-upload">
-    <p class="quote-editor-title">Weka status ya mzigo</p>
-    <p class="muted quote-hint">Mteja anaiona kwenye app mara moja.</p>
-    <div class="actions status-actions">${buttons}</div>
-  </div>`;
+  return stageAction(item);
 }
 
 function offerHeroCard(item) {
@@ -1502,115 +1507,310 @@ function activeJobCard(item) {
   </section>`;
 }
 
+function timeMs(value) {
+  if (!value) return 0;
+  if (typeof value.toDate === 'function') {
+    const ms = value.toDate().getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  if (typeof value.seconds === 'number') return value.seconds * 1000;
+  const parsed = typeof value === 'number' ? value : Date.parse(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function orderClock(item) {
+  return timeMs(item?.offeredAt) || timeMs(item?.createdAt) || timeMs(item?.acceptedAt) || timeMs(item?.updatedAt);
+}
+
+function commissionParts(item) {
+  const fee = Math.max(0, Math.round(Number(item?.haulFee) || 0));
+  const done = item?.shipmentStatus === 'delivered' || item?.shipmentStatus === 'arrived';
+  const paid = done
+    ? (item.cashStatus === 'reconciled' ? fee : Math.min(fee, Math.round(Number(item.commissionPaidTzs) || 0)))
+    : 0;
+  return { fee, paid, outstanding: done ? Math.max(0, fee - paid) : 0, recorded: done && fee > 0 };
+}
+
+function deskRows() {
+  return state.shipments.filter((item) => orderBucket(item));
+}
+
+function opsSnapshot() {
+  const rows = deskRows();
+  const count = (key) => rows.filter((item) => orderBucket(item) === key).length;
+  const parts = state.shipments.filter((item) => item.carrierId === state.carrier?.id).map(commissionParts);
+  return {
+    total: rows.length,
+    incoming: count('new'),
+    awaiting: rows.filter((item) => orderBucket(item) === 'new' && !item.transporterVerifiedAt).length,
+    verified: count('verified'),
+    transit: count('transit'),
+    delivered: count('delivered'),
+    cancelled: count('cancelled'),
+    generated: parts.reduce((sum, part) => sum + (part.recorded ? part.fee : 0), 0),
+    paid: parts.reduce((sum, part) => sum + part.paid, 0),
+    outstanding: parts.reduce((sum, part) => sum + part.outstanding, 0),
+  };
+}
+
+function attentionItems() {
+  return deskRows().filter((item) => {
+    const bucket = orderBucket(item);
+    if (bucket === 'cancelled' || bucket === 'delivered') return false;
+    if (bucket === 'new') return true;
+    if (needsCustomerPrice(item)) return true;
+    if (String(item.quoteStatus || '') === 'offered') return true;
+    return false;
+  }).sort((a, b) => orderClock(b) - orderClock(a)).slice(0, 8);
+}
+
+function attentionLabel(item) {
+  const bucket = orderBucket(item);
+  if (bucket === 'new' && !item.transporterVerifiedAt) return 'Inasubiri uthibitisho';
+  if (bucket === 'new') return 'Inasubiri kukubaliwa';
+  if (needsCustomerPrice(item)) return 'Bei haijawekwa';
+  if (String(item.quoteStatus || '') === 'offered') return 'Bei inasubiri mteja';
+  return 'Inahitaji hatua';
+}
+
+function activityFeed() {
+  const events = [];
+  deskRows().forEach((item) => {
+    const ref = item.orderNumber || item.id.slice(0, 8);
+    (item.statusHistory || []).forEach((entry) => {
+      events.push({
+        ms: timeMs(entry.at),
+        ref,
+        id: item.id,
+        label: entry.label || HISTORY_LABEL[entry.status] || STATUS_LABEL[entry.status] || entry.status || 'Update',
+        at: entry.at ? when(entry.at) : '',
+      });
+    });
+    if (item.latestJourney?.message || item.latestJourney?.status) {
+      events.push({
+        ms: timeMs(item.latestJourney.at) || orderClock(item),
+        ref,
+        id: item.id,
+        label: item.latestJourney.message || item.latestJourney.status,
+        at: item.latestJourney.at ? when(item.latestJourney.at) : '',
+      });
+    }
+  });
+  const seen = new Set();
+  return events
+    .filter((event) => event.label)
+    .sort((a, b) => b.ms - a.ms)
+    .filter((event) => {
+      const key = `${event.id}|${event.label}|${event.at}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 14);
+}
+
+function lifecycleMarks(item) {
+  const historyAt = (statuses) => {
+    const hit = (item.statusHistory || []).find((entry) => statuses.includes(String(entry.status || '')));
+    return hit?.at || '';
+  };
+  return [
+    { label: 'Imeingia', at: item.offeredAt || item.createdAt || historyAt(['assigned', 'matching']) },
+    { label: 'Imethibitishwa', at: item.transporterVerifiedAt || item.acceptedAt || historyAt(['received', 'accepted', 'verified']) },
+    { label: 'Imetumwa', at: item.inTransitAt || item.loadedAt || item.pickedUpAt || historyAt(['transit', 'in_transit', 'packed']) },
+    { label: 'Imekabidhiwa', at: item.deliveredAt || historyAt(['handed', 'delivered']) },
+  ];
+}
+
+function lifecycleList(item) {
+  return `<ol class="life">${lifecycleMarks(item).map((mark) => {
+    const known = Boolean(mark.at) && when(mark.at) !== '—';
+    return `<li class="${known ? 'known' : ''}"><span>${esc(mark.label)}</span><time>${known ? esc(when(mark.at)) : '—'}</time></li>`;
+  }).join('')}</ol>`;
+}
+
+function photoThumb(item) {
+  void ensureCargoPhotos(item);
+  const url = cargoPhotoList(item)[0];
+  return url
+    ? `<img class="thumb" src="${esc(url)}" alt="" referrerpolicy="no-referrer" />`
+    : '<span class="thumb empty" aria-hidden="true"></span>';
+}
+
+function ordersTrend() {
+  const days = [];
+  const now = Date.now();
+  for (let i = 13; i >= 0; i -= 1) {
+    const ms = now - i * 86400000;
+    const key = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam' }).format(new Date(ms));
+    days.push({
+      key,
+      label: new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+      count: 0,
+    });
+  }
+  const index = new Map(days.map((day) => [day.key, day]));
+  let dated = 0;
+  deskRows().forEach((item) => {
+    const ms = orderClock(item);
+    if (!ms) return;
+    dated += 1;
+    const bucket = index.get(new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam' }).format(new Date(ms)));
+    if (bucket) bucket.count += 1;
+  });
+  return { days, dated };
+}
+
+function metricCell(label, value, tone) {
+  return `<article class="metric ${tone || ''}"><span>${esc(label)}</span><strong>${esc(value)}</strong></article>`;
+}
+
 function dashboard() {
+  const snap = opsSnapshot();
   const company = state.carrier?.companyName || 'Transporter';
-  const rows = state.shipments.filter(mine);
-  const offers = rows.filter((item) => item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id);
-  const accepted = rows.filter((item) => item.carrierId === state.carrier?.id && ['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus'].includes(item.shipmentStatus));
-  const transit = rows.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'in_transit');
-  const completed = rows.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'delivered');
-  const initials = company.split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || 'H';
-  const welcome = `<section class="welcome-banner">
-    <span class="co-avatar lg" aria-hidden="true">${esc(initials)}</span>
-    <div>
-      <h2>Welcome, ${esc(company)}</h2>
-      <p>Live cargo for your regions. Accept offers, dispatch drivers, and track what is actually on the road.</p>
-    </div>
-  </section>
-  <div class="finance-row">
-    <article class="stat"><span>New offers</span><strong>${offers.length}</strong></article>
-    <article class="stat"><span>Accepted</span><strong>${accepted.length}</strong></article>
-    <article class="stat"><span>In transit</span><strong>${transit.length}</strong></article>
-    <article class="stat"><span>Completed</span><strong>${completed.length}</strong></article>
-  </div>`;
-  const activeOwned = [...accepted, ...transit];
-  const ownedCards = activeOwned.length
-    ? `<section class="panel"><div class="section-head"><h2>Mizigo yako</h2></div>
-        <div class="order-list">${activeOwned.map((item) => {
-          void ensureCargoPhotos(item);
-          return `<article class="panel order-card offer-card">
-            <header><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>${badge(item.shipmentStatus)}</header>
-            <p class="offer-route">${esc(item.pickupLabel || item.origin || 'Dar')} → ${esc(dropOffLabel(item))}</p>
-            ${renderCargoPhotos(item)}
-            ${quotePanel(item, { force: true })}
-            ${statusUploadPanel(item)}
-            <div class="actions"><a class="btn line small" href="#/assignment/${esc(item.id)}">Fungua</a></div>
-          </article>`;
-        }).join('')}</div></section>`
-    : '';
-  const offerCards = offers.length
-    ? `<section class="panel"><div class="section-head"><h2>Oda mpya za kuchukua</h2></div>
-        <div class="order-list">${offers.map((item) => {
-          void ensureCargoPhotos(item);
-          return `<article class="panel order-card offer-card">
-            <header><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>${offerCountdownBlock(item)}</header>
-            <p class="offer-route">${esc(item.pickupLabel || item.origin || 'Dar')} → ${esc(dropOffLabel(item))}</p>
-            <p class="muted">${esc(item.weightKg || 0)} kg${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''} · thamani ${money(declaredValueOf(item))}</p>
-            ${renderCargoPhotos(item)}
-            ${quotePanel(item, { force: true })}
-            ${statusUploadPanel(item)}
-            <div class="actions">
-              ${item.transporterVerifiedAt
-                ? `<button class="btn primary small" data-act="accept" data-id="${esc(item.id)}" type="button">Chukua oda</button>`
-                : `<button class="btn primary small" data-act="verify" data-id="${esc(item.id)}" type="button">Thibitisha oda</button>`}
-              <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a>
-              <button class="btn line small" data-act="reject" data-id="${esc(item.id)}" type="button">Kataa</button>
-            </div>
-          </article>`;
-        }).join('')}</div></section>`
-    : '<p class="empty">Hakuna oda mpya sasa. Oda zinazofaa mikoa yako zitaonekana hapa.</p>';
-  if (offers.length) startCountdownTicker();
+  const attention = attentionItems();
+  const feed = activityFeed();
+  const active = deskRows()
+    .filter((item) => ['verified', 'transit'].includes(orderBucket(item)))
+    .sort((a, b) => orderClock(b) - orderClock(a))
+    .slice(0, 6);
+  const done = deskRows().filter((item) => orderBucket(item) === 'delivered').sort((a, b) => timeMs(b.deliveredAt) - timeMs(a.deliveredAt)).slice(0, 5);
+  const trend = ordersTrend();
+  const maxBar = Math.max(1, ...trend.days.map((day) => day.count));
+  const closed = snap.delivered + snap.cancelled;
+  const completion = closed > 0 ? `${Math.round((snap.delivered / closed) * 100)}%` : '—';
+  const flowTotal = Math.max(1, snap.incoming + snap.verified + snap.transit + snap.delivered);
+  const flow = [
+    ['Mpya', snap.incoming],
+    ['Imepokelewa', snap.verified],
+    ['Njiani', snap.transit],
+    ['Imekabidhiwa', snap.delivered],
+  ];
+  if (snap.incoming) startCountdownTicker();
   else stopCountdownTicker();
-  return `${welcome}${offerCards}${ownedCards}`;
+  const attentionBody = attention.length
+    ? attention.map((item) => `<a class="feed-row" href="#/assignment/${esc(item.id)}">
+        ${photoThumb(item)}
+        <span><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong><em>${esc(item.pickupLabel || item.origin || 'Pickup')} → ${esc(dropOffLabel(item))}</em></span>
+        <b class="attn">${esc(attentionLabel(item))}</b>
+      </a>`).join('')
+    : '<p class="empty">Hakuna oda inayosubiri hatua.</p>';
+  const feedBody = feed.length
+    ? feed.map((event) => `<a class="feed-row slim" href="#/assignment/${esc(event.id)}"><span><strong>${esc(event.ref)}</strong><em>${esc(event.label)}</em></span><time>${esc(event.at || '')}</time></a>`).join('')
+    : '<p class="empty">Hakuna mabadiliko ya status bado.</p>';
+  const activeBody = active.length
+    ? `<div class="table-wrap"><table class="ops-table"><thead><tr><th></th><th>Order</th><th>Route</th><th>Status</th><th>Received</th><th></th></tr></thead><tbody>${active.map((item) => `<tr>
+        <td>${photoThumb(item)}</td>
+        <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong><div class="cell-sub">${esc(item.customerName || '')}</div></td>
+        <td>${esc(item.pickupLabel || item.origin || '—')} → ${esc(dropOffLabel(item))}</td>
+        <td>${stageBadge(item)}</td>
+        <td>${esc(when(item.offeredAt || item.createdAt || item.acceptedAt))}</td>
+        <td class="actions">${stageButton(item)}<a class="btn line small" href="#/assignment/${esc(item.id)}">Open</a></td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<p class="empty">Hakuna mzigo unaosafirishwa.</p>';
+  return `<header class="ops-head"><div><p class="ops-kicker">${esc(company)}</p><h2>Operations</h2></div><p class="ops-completion"><span>Completion</span><strong>${completion}</strong></p></header>
+  <section class="metric-strip">
+    ${metricCell('Total orders', snap.total)}
+    ${metricCell('Incoming', snap.incoming, snap.incoming ? 'hot' : '')}
+    ${metricCell('Awaiting verification', snap.awaiting, snap.awaiting ? 'hot' : '')}
+    ${metricCell('Verified', snap.verified)}
+    ${metricCell('In transit', snap.transit, snap.transit ? 'live' : '')}
+    ${metricCell('Delivered', snap.delivered)}
+    ${metricCell('Cancelled', snap.cancelled)}
+    ${metricCell('Commission generated', money(snap.generated))}
+    ${metricCell('Outstanding', money(snap.outstanding), snap.outstanding ? 'hot' : '')}
+    ${metricCell('Commission paid', money(snap.paid))}
+  </section>
+  <div class="ops-grid">
+    <section class="panel ops-panel">
+      <div class="section-head"><h2>Lifecycle</h2><a href="#/orders/new">Orders</a></div>
+      <div class="flow">${flow.map(([label, count]) => `<div><span>${label}</span><b>${count}</b><i style="width:${Math.round((count / flowTotal) * 100)}%"></i></div>`).join('')}</div>
+      ${trend.dated ? `<div class="trend" aria-label="Orders over 14 days">${trend.days.map((day) => `<span title="${esc(day.label)} · ${day.count}"><i style="height:${Math.max(4, Math.round((day.count / maxBar) * 100))}%"></i></span>`).join('')}</div><p class="muted trend-note">${trend.dated} orders have a received time in the loaded desk.</p>` : '<p class="empty">Hakuna tarehe za oda za kuchora mwenendo.</p>'}
+    </section>
+    <section class="panel ops-panel">
+      <div class="section-head"><h2>Needs attention</h2><span class="muted">${attention.length}</span></div>
+      <div class="feed">${attentionBody}</div>
+    </section>
+    <section class="panel ops-panel">
+      <div class="section-head"><h2>Live activity</h2></div>
+      <div class="feed">${feedBody}</div>
+    </section>
+    <section class="panel ops-panel">
+      <div class="section-head"><h2>On the road</h2><a href="#/transit">In transit</a></div>
+      ${activeBody}
+      ${done.length ? `<p class="muted done-note">Latest delivered · ${done.map((item) => esc(item.orderNumber || item.id.slice(0, 8))).join(' · ')}</p>` : ''}
+    </section>
+  </div>`;
 }
 
 function ordersTable(rows, showAccept) {
   if (!rows.length) return '<p class="empty">No orders in this list.</p>';
-  return `<div class="table-wrap"><table>
+  return `<div class="table-wrap"><table class="ops-table">
     <thead><tr>
-      <th>Reference</th><th>Pickup</th><th>Destination</th><th>Cargo</th><th>Picha</th>
-      <th>Price</th><th>Status</th><th></th>
+      <th></th><th>Order</th><th>Customer</th><th>Route</th><th>Cargo</th>
+      <th>Value</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
     </tr></thead>
     <tbody>${rows.map((item) => {
-      void ensureCargoPhotos(item);
-      const photos = cargoPhotoList(item);
-      const actions = showAccept && item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id
-        ? `${item.transporterVerifiedAt
-          ? `<button class="btn primary small" data-act="accept" data-id="${esc(item.id)}" type="button">Accept</button>`
-          : `<button class="btn primary small" data-act="verify" data-id="${esc(item.id)}" type="button">Verify</button>`}
-           <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a>`
-        : `<a class="btn primary small" href="#/assignment/${esc(item.id)}">Open</a>`;
+      const fee = commissionParts(item);
+      const actions = `${stageButton(item)}<a class="btn line small" href="#/assignment/${esc(item.id)}">Open</a>`;
       return `<tr>
+        <td>${photoThumb(item)}</td>
         <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
-        <td>${esc(item.pickupLabel || item.origin || '—')}</td>
-        <td>${esc(item.destination || item.dropoffLabel || item.routeLabel || '—')}</td>
+        <td>${esc(item.customerName || '—')}<div class="cell-sub">${esc(item.customerPhone || '')}</div></td>
+        <td>${esc(item.pickupLabel || item.origin || '—')}<div class="cell-sub">${esc(item.destination || item.dropoffLabel || '—')}</div></td>
         <td>${esc(item.parcelDescription || item.cargoDescription || 'Cargo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}</td>
-        <td>${photos.length ? `<img class="table-photo" src="${esc(photos[0])}" alt="Mzigo" referrerpolicy="no-referrer" />` : '—'}</td>
-        <td>${priceOf(item) > 0 ? money(priceOf(item)) : 'Bei baada ya kampuni'}</td>
-        <td>${badge(item.shipmentStatus)}</td>
+        <td>${priceOf(item) > 0 ? money(priceOf(item)) : '—'}</td>
+        <td>${fee.recorded ? money(fee.fee) : '—'}</td>
+        <td>${esc(when(item.offeredAt || item.createdAt || item.acceptedAt))}</td>
+        <td>${stageBadge(item)}</td>
         <td class="actions">${actions}</td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
 }
 
 const ORDER_TABS = [
-  ['new', 'Mpya'],
-  ['verified', 'Imepokelewa'],
-  ['transit', 'Njiani'],
-  ['delivered', 'Imekabidhiwa'],
-  ['cancelled', 'Imefutwa'],
+  ['new', 'New order'],
+  ['verified', 'Verified'],
+  ['transit', 'In transit'],
+  ['delivered', 'Delivered'],
+  ['cancelled', 'Cancelled'],
 ];
 
 function orderBucket(item) {
   const mineId = state.carrier?.id;
   const status = String(item.shipmentStatus || '');
+  const step = String(item.trackStep || '');
   const declined = Array.isArray(item.declinedCarrierIds) && item.declinedCarrierIds.includes(mineId);
   if (status === 'cancelled' || (declined && item.carrierId !== mineId && item.offeredCarrierId !== mineId)) return 'cancelled';
-  if (status === 'delivered') return 'delivered';
-  if (status === 'in_transit' || ['at_checkpoint', 'near_destination'].includes(item.journeyStatus)) return 'transit';
-  if (item.carrierId === mineId || item.transporterVerifiedAt) return 'verified';
+  if (status === 'delivered' || step === 'handed') return 'delivered';
+  if (status === 'in_transit' || status === 'arrived' || step === 'transit' || step === 'arrived' || ['at_checkpoint', 'near_destination'].includes(item.journeyStatus)) return 'transit';
+  if (item.carrierId === mineId) return 'verified';
   if (status === 'assigned' && item.offeredCarrierId === mineId) return 'new';
   return '';
+}
+
+function stageBadge(item) {
+  const bucket = orderBucket(item);
+  const labels = {
+    new: 'New order',
+    verified: 'Verified',
+    transit: 'In transit',
+    delivered: 'Delivered',
+    cancelled: 'Cancelled',
+  };
+  const label = labels[bucket];
+  if (!label) return badge(item.shipmentStatus);
+  return `<span class="badge stage-${bucket}">${esc(label)}</span>`;
+}
+
+function stageIcon(name) {
+  const paths = {
+    new: '<path d="M6 3h9l3 3v15H6z"/><path d="M9 12h6M9 16h4"/>',
+    verified: '<path d="M20 6 9 17l-5-5"/>',
+    transit: '<path d="M3 16V8h11v8"/><path d="M14 11h4l3 3v2h-7"/><circle cx="7.5" cy="18" r="1.4"/><circle cx="17.5" cy="18" r="1.4"/>',
+    delivered: '<path d="M20 6 9 17l-5-5"/>',
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 }
 
 function cargoPhoto(item) {
@@ -1680,66 +1880,170 @@ function quotePanel(item, opts = {}) {
   </form>`;
 }
 
-function orderActions(item) {
-  const bucket = orderBucket(item);
-  const id = esc(item.id);
-  if (bucket === 'new') return `<button class="btn primary small" data-act="verify" data-id="${id}" type="button">Verify order</button>`;
-  if (bucket === 'verified' && !item.carrierId) return `<button class="btn primary small" data-act="accept" data-id="${id}" type="button">Accept</button>`;
-  if (bucket === 'verified' && item.quoteStatus && item.quoteStatus !== 'confirmed') return '';
-  if (bucket === 'verified') return `<button class="btn primary small" data-act="start-transit" data-id="${id}" type="button">Start journey</button>`;
-  if (bucket === 'transit') {
-    return `<button class="btn primary small" data-act="journey" data-id="${id}" type="button">Update journey</button>
-      <button class="btn line small" data-act="tracking-link" data-id="${id}" type="button">Send tracking link</button>
-      <button class="btn line small" data-act="deliver" data-id="${id}" type="button">Mark delivered</button>`;
-  }
-  return `<a class="btn line small" href="#/assignment/${id}">Open</a>`;
+function stageStamp(item, key) {
+  const historyAt = (statuses) => {
+    const hit = (item.statusHistory || []).find((entry) => statuses.includes(String(entry.status || '')));
+    return hit?.at || '';
+  };
+  if (key === 'new') return item.offeredAt || item.createdAt || historyAt(['assigned']);
+  if (key === 'verified') return item.acceptedAt || historyAt(['accepted', 'received']);
+  if (key === 'transit') return item.inTransitAt || historyAt(['in_transit', 'transit']);
+  if (key === 'delivered') return item.deliveredAt || historyAt(['handed', 'delivered']);
+  return '';
 }
 
-function orderPipeline(item) {
-  const steps = [
-    ['new', 'Mpya'],
-    ['verified', 'Imepokelewa'],
-    ['transit', 'Njiani'],
-    ['delivered', 'Imekabidhiwa'],
+function stageTracker(item) {
+  const stages = [
+    ['new', 'New order'],
+    ['verified', 'Verified'],
+    ['transit', 'In transit'],
+    ['delivered', 'Delivered'],
   ];
   const bucket = orderBucket(item);
-  if (bucket === 'cancelled') return '';
-  const index = Math.max(0, steps.findIndex(([key]) => key === bucket));
-  return `<ol class="pipe">${steps.map(([key, label], step) => `<li class="${step < index ? 'done' : step === index ? 'now' : ''}">${label}</li>`).join('')}</ol>`;
+  if (bucket === 'cancelled' || !bucket) return '';
+  const index = Math.max(0, stages.findIndex(([key]) => key === bucket));
+  return `<ol class="stage">${stages.map(([key, label], step) => {
+    const tone = step < index ? 'done' : step === index ? 'now' : '';
+    const at = stageStamp(item, key);
+    const known = at && when(at) !== '—';
+    return `<li class="${tone}"><i>${stageIcon(key)}</i><span>${label}</span>${known && step <= index ? `<time>${esc(when(at))}</time>` : ''}</li>`;
+  }).join('')}</ol>`;
+}
+
+function stageAction(item) {
+  const bucket = orderBucket(item);
+  if (!bucket || bucket === 'cancelled') return '';
+  const id = esc(item.id);
+  const busy = state.stageBusy === item.id;
+  if (bucket === 'delivered') {
+    return `${stageTracker(item)}<div class="stage-action is-done"><strong>${stageIcon('delivered')} Delivery completed</strong><p>The customer sees Delivered.</p></div>`;
+  }
+  if (bucket === 'transit') {
+    return `${stageTracker(item)}<div class="stage-action"><p>Cargo is on the way. The customer sees On the Way.</p><button class="btn primary" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('delivered')} Mark as delivered</button></div>`;
+  }
+  if (bucket === 'verified') {
+    const quote = String(item.quoteStatus || '');
+    if (quote && quote !== 'confirmed') {
+      return `${stageTracker(item)}<div class="stage-action"><strong>Verified</strong><p>The customer sees Confirmed. Delivery starts after they confirm the price.</p></div>`;
+    }
+    return `${stageTracker(item)}<div class="stage-action"><p>The customer sees Confirmed.</p><button class="btn primary" type="button" data-act="start-transit" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('transit')} Start delivery</button></div>`;
+  }
+  return `${stageTracker(item)}<div class="stage-action"><p>New order. The customer sees Order Received until you verify it.</p><button class="btn primary" type="button" data-act="accept" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('verified')} Verify order</button><button class="btn line" type="button" data-act="reject" data-id="${id}" ${busy ? 'disabled' : ''}>Decline</button></div>`;
+}
+
+function stageButton(item) {
+  const bucket = orderBucket(item);
+  const id = esc(item.id);
+  const busy = state.stageBusy === item.id ? 'disabled' : '';
+  if (bucket === 'new') return `<button class="btn primary small" type="button" data-act="accept" data-id="${id}" ${busy}>${stageIcon('verified')} Verify order</button>`;
+  if (bucket === 'verified') {
+    const quote = String(item.quoteStatus || '');
+    if (quote && quote !== 'confirmed') return '<span class="attn">Awaiting price</span>';
+    return `<button class="btn primary small" type="button" data-act="start-transit" data-id="${id}" ${busy}>${stageIcon('transit')} Start delivery</button>`;
+  }
+  if (bucket === 'transit') return `<button class="btn primary small" type="button" data-act="deliver" data-id="${id}" ${busy}>${stageIcon('delivered')} Mark as delivered</button>`;
+  if (bucket === 'delivered') return '<span class="badge stage-delivered">Delivery completed</span>';
+  return '';
+}
+
+function orderActions() {
+  return '';
+}
+
+function orderPipeline() {
+  return '';
 }
 
 function ordersDesk(tab) {
   const current = ORDER_TABS.some(([key]) => key === tab) ? tab : 'new';
-  const rows = state.shipments.filter((item) => orderBucket(item) === current);
+  if (state.deskTab !== current) {
+    state.deskTab = current;
+    state.deskPage = 1;
+    state.deskOpen = '';
+  }
+  const query = String(state.deskQuery || '').trim().toLowerCase();
+  const fromMs = state.deskFrom ? Date.parse(`${state.deskFrom}T00:00:00`) : 0;
+  const toMs = state.deskTo ? Date.parse(`${state.deskTo}T23:59:59`) : 0;
+  let rows = state.shipments.filter((item) => orderBucket(item) === current);
+  if (query) {
+    rows = rows.filter((item) => [
+      item.orderNumber, item.id, item.customerName, item.customerPhone, item.recipientName,
+      item.pickupLabel, item.origin, item.destination, item.dropoffLabel, item.parcelDescription,
+    ].join(' ').toLowerCase().includes(query));
+  }
+  if (fromMs || toMs) {
+    rows = rows.filter((item) => {
+      const ms = orderClock(item);
+      if (!ms) return false;
+      if (fromMs && ms < fromMs) return false;
+      if (toMs && ms > toMs) return false;
+      return true;
+    });
+  }
+  rows.sort((a, b) => orderClock(b) - orderClock(a));
+  const pageSize = 12;
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.min(Math.max(1, state.deskPage || 1), pages);
+  state.deskPage = page;
+  const slice = rows.slice((page - 1) * pageSize, page * pageSize);
   const tabs = ORDER_TABS.map(([key, label]) => {
     const count = state.shipments.filter((item) => orderBucket(item) === key).length;
     return `<a class="order-tab ${key === current ? 'on' : ''}" href="#/orders/${key}"><span>${label}</span><em>${count}</em></a>`;
   }).join('');
-  const body = rows.length
-    ? `<div class="order-list">${rows.map((item) => {
-        const latest = item.latestJourney || {};
-        const fee = priceOf(item) > 0 ? money(priceOf(item)) : 'Bei haijawekwa';
-        return `<article class="order-card">
-          <div class="order-media">${renderCargoPhotos(item)}</div>
-          <div class="order-body">
-            <header>
+  const body = slice.length
+    ? `<div class="table-wrap"><table class="ops-table">
+        <thead><tr>
+          <th></th><th>Order</th><th>Customer</th><th>Route</th><th>Cargo</th>
+          <th>Value</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>${slice.map((item) => {
+          const fee = commissionParts(item);
+          const open = state.deskOpen === item.id;
+          const latest = item.latestJourney || {};
+          return `<tr class="${open ? 'is-open' : ''}">
+            <td>${photoThumb(item)}</td>
+            <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
+            <td>${esc(item.customerName || '—')}<div class="cell-sub">${esc(item.customerPhone || '')}</div></td>
+            <td>${esc(item.pickupLabel || item.origin || '—')}<div class="cell-sub">${esc(dropOffLabel(item))}</div></td>
+            <td>${esc(item.parcelDescription || 'Cargo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</td>
+            <td>${priceOf(item) > 0 ? money(priceOf(item)) : '—'}</td>
+            <td>${fee.recorded ? money(fee.fee) : '—'}${fee.outstanding ? `<div class="cell-sub">due ${money(fee.outstanding)}</div>` : ''}</td>
+            <td>${esc(when(item.offeredAt || item.createdAt || item.acceptedAt))}</td>
+            <td>${stageBadge(item)}</td>
+            <td class="actions">${stageButton(item)}<button class="btn line small" type="button" data-desk="open" data-id="${esc(item.id)}">${open ? 'Hide' : 'Details'}</button></td>
+          </tr>
+          ${open ? `<tr class="desk-detail"><td colspan="10">
+            <div class="desk-detail-grid">
+              <div class="order-media">${renderCargoPhotos(item)}</div>
               <div>
-                <strong class="order-ref">${esc(item.orderNumber || item.id.slice(0, 8))}</strong>
-                <p class="order-route">${esc(item.pickupLabel || item.origin || 'Pickup')} → ${esc(item.destination || 'Destination')}</p>
+                ${orderPipeline(item)}
+                ${lifecycleList(item)}
+                <p class="order-latest">Company · ${esc(item.carrierCompanyName || state.carrier?.companyName || '—')}</p>
+                <p class="order-latest">Latest · ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(when(latest.at))}` : ''}</p>
+                ${quotePanel(item, { force: current === 'new' || current === 'verified' || isOutsideCompanyJob(item) })}
+                ${statusUploadPanel(item)}
+                <div class="actions">${orderActions(item)} <a class="btn line small" href="#/assignment/${esc(item.id)}">Full record</a></div>
               </div>
-              ${badge(item.journeyStatus || item.shipmentStatus)}
-            </header>
-            ${orderPipeline(item)}
-            <p class="order-meta">${esc(item.customerName || 'Customer')} · ${esc(item.customerPhone || '—')} · ${esc(item.parcelDescription || 'Cargo')}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''} · ${esc(fee)}</p>
-            ${quotePanel(item, { force: current === 'new' || current === 'verified' || isOutsideCompanyJob(item) })}
-            ${statusUploadPanel(item)}
-            <p class="order-latest">Latest · ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(latest.at)}` : ''}</p>
-            <div class="actions">${orderActions(item)} <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a></div>
+            </div>
+          </td></tr>` : ''}`;
+        }).join('')}</tbody></table></div>
+        <div class="pager">
+          <span>${rows.length} orders · page ${page} of ${pages}</span>
+          <div>
+            <button class="btn line small" type="button" data-desk="page" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>Previous</button>
+            <button class="btn line small" type="button" data-desk="page" data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>Next</button>
           </div>
-        </article>`;
-      }).join('')}</div>`
-    : '<p class="empty">Hakuna oda katika hatua hii.</p>';
-  return `<div class="order-desk"><div class="order-tabs" role="tablist">${tabs}</div>${body}</div>`;
+        </div>`
+    : `<p class="empty">${query || fromMs || toMs ? 'Hakuna oda inayolingana na utafutaji.' : 'Hakuna oda katika hatua hii.'}</p>`;
+  return `<div class="order-desk">
+    <div class="desk-tools">
+      <input id="deskSearch" type="search" placeholder="Search order, customer, phone, route" value="${esc(state.deskQuery || '')}" />
+      <label>From <input id="deskFrom" type="date" value="${esc(state.deskFrom || '')}" /></label>
+      <label>To <input id="deskTo" type="date" value="${esc(state.deskTo || '')}" /></label>
+    </div>
+    <div class="order-tabs" role="tablist">${tabs}</div>
+    ${body}
+  </div>`;
 }
 
 async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
@@ -1994,7 +2298,27 @@ function financePage() {
   const notice = standing.blocked
     ? `<p class="form-error">${esc(standing.reason)}</p>`
     : '';
+  const generated = delivered.reduce((sum, item) => sum + commissionParts(item).fee, 0);
+  const paid = delivered.reduce((sum, item) => sum + commissionParts(item).paid, 0);
+  const months = new Map();
+  delivered.forEach((item) => {
+    const ms = timeMs(item.deliveredAt);
+    const part = commissionParts(item);
+    if (!ms || !part.fee) return;
+    const key = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam', year: 'numeric', month: 'short' }).format(new Date(ms));
+    months.set(key, (months.get(key) || 0) + part.fee);
+  });
+  const monthRows = [...months.entries()];
+  const monthMax = Math.max(1, ...monthRows.map(([, value]) => value));
   return `${notice}
+  <section class="metric-strip">
+    ${metricCell('Commission generated', money(generated))}
+    ${metricCell('Commission paid', money(paid))}
+    ${metricCell('Outstanding', money(standing.unpaid), standing.unpaid ? 'hot' : '')}
+    ${metricCell('Carrier net', money(net))}
+    ${metricCell('Completed orders', delivered.length)}
+    ${metricCell('Pay ceiling', money(standing.ceiling))}
+  </section>
   <section class="panel tier-card tier-${esc(standing.tier.id)}">
     <div class="level-row">
       <span class="co-avatar lg" aria-hidden="true">${esc(standing.tier.label.slice(0, 1))}</span>
@@ -2009,12 +2333,7 @@ function financePage() {
     <div class="tier-bar"><span style="width:${progress}%"></span></div>
     <button class="btn line small" data-go="levels" type="button">Level benefits</button>
   </section>
-  <div class="finance-row">
-    <article class="stat"><span>Unpaid commission</span><strong>${money(standing.unpaid)}</strong></article>
-    <article class="stat"><span>Pay ceiling</span><strong>${money(standing.ceiling)}</strong></article>
-    <article class="stat"><span>Carrier net</span><strong>${money(net)}</strong></article>
-    <article class="stat"><span>Completed</span><strong>${delivered.length}</strong></article>
-  </div>
+  ${monthRows.length ? `<section class="panel"><h2>Commission by month</h2><div class="month-bars">${monthRows.map(([label, value]) => `<div><span>${esc(label)}</span><i style="width:${Math.round((value / monthMax) * 100)}%"></i><b>${money(value)}</b></div>`).join('')}</div></section>` : ''}
   <section class="panel"><h2>Pay commission</h2>
     <p class="muted">USSD push via M-Pesa, Mixx, or Airtel. Any amount up to the unpaid balance.</p>
     <form id="commissionForm" class="form-grid">
@@ -2030,11 +2349,19 @@ function financePage() {
     <p class="muted" id="payNote"></p>
   </section>
   <section class="panel"><h2>Commission by order</h2>
-    ${delivered.map((item) => {
-      const fee = Math.round(Number(item.haulFee) || 0);
-      const paid = item.cashStatus === 'reconciled' ? fee : Math.min(fee, Math.round(Number(item.commissionPaidTzs) || 0));
-      return `<p><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong> · fee ${money(fee)} · paid ${money(paid)} · due ${money(Math.max(0, fee - paid))}</p>`;
-    }).join('') || '<p class="empty">Completed shipments will show commission here.</p>'}
+    ${delivered.length ? `<div class="table-wrap"><table class="ops-table"><thead><tr><th>Order</th><th>Route</th><th>Delivered</th><th>Earned</th><th>Paid</th><th>Outstanding</th><th>State</th></tr></thead><tbody>${delivered.map((item) => {
+      const part = commissionParts(item);
+      const stateLabel = part.outstanding > 0 ? 'Outstanding' : (part.fee > 0 ? 'Paid' : 'No fee');
+      return `<tr>
+        <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
+        <td>${esc(dropOffLabel(item))}</td>
+        <td>${esc(when(item.deliveredAt))}</td>
+        <td>${money(part.fee)}</td>
+        <td>${money(part.paid)}</td>
+        <td>${money(part.outstanding)}</td>
+        <td><span class="badge ${part.outstanding > 0 ? '' : 'live'}">${stateLabel}</span></td>
+      </tr>`;
+    }).join('')}</tbody></table></div>` : '<p class="empty">Completed shipments will show commission here.</p>'}
   </section>`;
 }
 
@@ -2067,7 +2394,7 @@ function orderRow(item) {
     <div class="cargo-item-body">
       <strong>${esc(dropOffLabel(item))}</strong>
       <span class="cargo-item-meta">${esc(item.weightKg || 0)} kg · ${money(priceOf(item))} · thamani ${value ? esc(money(value)) : '—'}</span>
-      ${offered ? offerCountdownBlock(item) : `<span class="cargo-item-meta">${badge(item.shipmentStatus)}</span>`}
+      ${offered ? offerCountdownBlock(item) : `<span class="cargo-item-meta">${stageBadge(item)}</span>`}
     </div>
     <div class="cargo-item-actions">${actions}</div>
   </article>`;
@@ -2102,7 +2429,6 @@ function trackerBlock(item) {
 function assignmentPage(id) {
   const item = state.shipments.find((shipment) => shipment.id === id);
   if (!item || !mine(item)) return '<p class="empty">This order is not available on your account.</p>';
-  const offered = item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id;
   const owned = item.carrierId === state.carrier?.id;
   const map = item.pickupLatitude && item.pickupLongitude
     ? `https://www.google.com/maps/search/?api=1&query=${item.pickupLatitude},${item.pickupLongitude}`
@@ -2113,19 +2439,16 @@ function assignmentPage(id) {
   void ensureCargoPhotos(item);
   return `<section class="panel">
     <p class="offer-route">${esc(item.orderNumber || item.id.slice(0, 8))} · ${esc(item.destination || item.routeLabel || 'Cargo')}</p>
-    <p class="muted">${badge(item.shipmentStatus)}</p>
-    ${offered ? offerCountdownBlock(item) : ''}
+    <p class="muted">${stageBadge(item)}</p>
     ${quotePanel(item, { force: true })}
     ${statusUploadPanel(item)}
     ${renderCargoPhotos(item)}
     ${orderFacts(item)}
     <div class="actions" style="margin-top:14px">
-      ${offered ? `${item.transporterVerifiedAt ? `<button class="btn primary" data-act="accept" data-id="${esc(item.id)}" type="button">Chukua oda</button>` : `<button class="btn primary" data-act="verify" data-id="${esc(item.id)}" type="button">Thibitisha oda</button>`}<button class="btn line" data-act="reject" data-id="${esc(item.id)}" type="button">Kataa</button>` : ''}
-      ${owned ? `<a class="btn primary" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
+      ${owned ? `<a class="btn line" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
       <a class="btn line" href="${destMap}" target="_blank" rel="noopener">Directions</a>
     </div>
-  </section>
-  ${owned ? trackerBlock(item) : ''}`;
+  </section>`;
 }
 
 function stickerPage(id) {
@@ -2182,7 +2505,7 @@ function pickupQueue() {
       <td>${esc(item.customerName)}</td>
       <td>${esc(item.customerPhone)}</td>
       <td>${esc(item.weightKg || 0)} kg</td>
-      <td>${badge(item.shipmentStatus === 'picked_up' ? 'picked_up' : item.shipmentStatus)}</td>
+      <td>${stageBadge(item)}</td>
     </tr>`).join('')}
   </tbody></table></div>`;
 }
@@ -2443,7 +2766,7 @@ function faresPage() {
       <strong><code>${esc(shipmentCode(item))}</code> · ${esc(dropOffLabel(item))}</strong>
       <span class="cargo-item-meta">bei ${money(priceOf(item))} · ada ${money(item.haulFee || 0)} · neti ${money(item.carrierNet || 0)}</span>
     </div>
-    <div class="cargo-item-actions">${badge(item.shipmentStatus)}</div>
+    <div class="cargo-item-actions">${stageBadge(item)}</div>
   </article>`).join('')}</div>`;
 }
 
@@ -2903,7 +3226,7 @@ async function render() {
   };
   $('pageTitle').textContent = titles[page] || 'Dashboard';
   const viewEl = $('view');
-  viewEl.classList.toggle('wide', page === 'fares' || page === 'payments' || page === 'available');
+  viewEl.classList.toggle('wide', ['fares', 'payments', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment'].includes(page));
   const rows = state.shipments.filter(mine);
   let html = '';
   if (!state.carrier && !state.isAdmin && page !== 'desk' && page !== 'uthibitisho') {
@@ -2949,6 +3272,15 @@ async function render() {
   }
   if (page === 'manifest' || page === 'mizigo') bindManifestScan();
   if (page === 'trips') bindLatraPoll(primaryRoute());
+  if (state.deskFocus) {
+    const node = document.getElementById(state.deskFocus);
+    state.deskFocus = '';
+    if (node) {
+      node.focus();
+      const pos = String(node.value || '').length;
+      if (node.setSelectionRange) node.setSelectionRange(pos, pos);
+    }
+  }
 }
 
 async function markNotificationsRead() {
@@ -3131,6 +3463,17 @@ async function onViewClick(event) {
     await updateDoc(doc(db, 'carrierRoutes', drop.dataset.drop), { active: false });
     return;
   }
+  const deskCtl = event.target.closest('[data-desk]');
+  if (deskCtl && !event.target.closest('[data-act]')) {
+    if (deskCtl.dataset.desk === 'open') {
+      state.deskOpen = state.deskOpen === deskCtl.dataset.id ? '' : deskCtl.dataset.id;
+    }
+    if (deskCtl.dataset.desk === 'page' && !deskCtl.disabled) {
+      state.deskPage = Math.max(1, Number(deskCtl.dataset.page) || 1);
+    }
+    render();
+    return;
+  }
   const actBtn = event.target.closest('[data-act]');
   const act = actBtn?.dataset.act;
   if (!act) return;
@@ -3174,6 +3517,12 @@ async function onViewClick(event) {
     return;
   }
   if (act === 'verify' || act === 'accept' || act === 'start-transit' || act === 'tracking-link' || act === 'deliver') {
+    if ((act === 'accept' || act === 'start-transit' || act === 'deliver') && state.stageBusy) return;
+    if (act === 'deliver' && !window.confirm('Mark this order as delivered? The customer will see Delivered.')) return;
+    if (act === 'accept' || act === 'start-transit' || act === 'deliver') {
+      state.stageBusy = id;
+      actBtn.disabled = true;
+    }
     const path = {
       verify: '/carrier/portal/verify',
       accept: '/carrier/portal/accept',
@@ -3699,6 +4048,16 @@ function bindAuth() {
     });
   });
   $('notesBtn')?.addEventListener('click', () => navigateApp('notifications'));
+  document.addEventListener('input', (event) => {
+    const el = event.target;
+    if (!el?.id || !['deskSearch', 'deskFrom', 'deskTo'].includes(el.id)) return;
+    state.deskQuery = document.getElementById('deskSearch')?.value || '';
+    state.deskFrom = document.getElementById('deskFrom')?.value || '';
+    state.deskTo = document.getElementById('deskTo')?.value || '';
+    state.deskPage = 1;
+    state.deskFocus = el.id;
+    render();
+  });
   $('authSwitch').onclick = () => open(state.mode === 'login' ? 'register' : 'login');
   $('forgotPassword')?.addEventListener('click', async () => {
     $('authError').textContent = '';
@@ -3873,6 +4232,12 @@ function bindAuth() {
     }
     onViewClick(event).catch((error) => {
       $('view').insertAdjacentHTML('afterbegin', `<p class="form-error">${esc(swahiliError(error.message))}</p>`);
+    }).finally(async () => {
+      if (!state.stageBusy) return;
+      const message = document.querySelector('#view .form-error')?.textContent || '';
+      state.stageBusy = '';
+      await render();
+      if (message) $('view')?.insertAdjacentHTML('afterbegin', `<p class="form-error">${esc(message)}</p>`);
     });
   });
   $('view').addEventListener('submit', (event) => {
