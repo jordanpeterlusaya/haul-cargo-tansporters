@@ -47,23 +47,23 @@ const NEXT_STATUS = {
 const STATUS_LABEL = {
   new: 'Mpya',
   matching: 'Inatafutwa',
-  assigned: 'Oda',
+  assigned: 'Oda mpya',
+  verified: 'Imethibitishwa',
   accepted: 'Imekubaliwa',
-  contacted: 'Uchukuzi',
-  pickup_scheduled: 'Pickup imewekwa',
-  picked_up: 'Imechukuliwa',
-  at_bus: 'Imepakiwa',
-  in_transit: 'Safarini',
+  contacted: 'Tunafuata',
+  pickup_scheduled: 'Tunafuata',
+  picked_up: 'Imepokelewa',
+  at_bus: 'Imepokelewa',
+  in_transit: 'Imetumwa',
   arrived: 'Imefika',
-  delivered: 'Imewasili',
+  delivered: 'Imekabidhiwa',
 };
 const TRACK = [
-  { key: 'received', label: 'Imepokelewa', status: 'accepted' },
-  { key: 'pickup', label: 'Uchukuzi', status: 'contacted' },
-  { key: 'packed', label: 'Imepakiwa', status: 'at_bus' },
-  { key: 'transit', label: 'Safarini', status: 'in_transit' },
+  { key: 'received', label: 'Imekubaliwa', status: 'accepted' },
+  { key: 'pickup', label: 'Tunafuata', status: 'contacted' },
+  { key: 'packed', label: 'Imepokelewa', status: 'picked_up' },
+  { key: 'transit', label: 'Imetumwa', status: 'in_transit' },
   { key: 'arrived', label: 'Imefika', status: 'arrived' },
-  { key: 'handed', label: 'Imewasili', status: 'delivered' },
 ];
 const TZ_REGIONS = [
   'Arusha', 'Dar es Salaam', 'Dodoma', 'Geita', 'Iringa', 'Kagera', 'Katavi', 'Kigoma',
@@ -75,15 +75,16 @@ const TZ_REGIONS = [
 const HISTORY_LABEL = {
   assigned: 'Oda imefika',
   accepted: 'Imekubaliwa',
-  received: 'Imepokelewa',
-  pickup: 'Uchukuzi',
-  agent_collects: 'Wakala anachukua',
-  haul_delivers_to_office: 'Kuleta ofisini',
-  contacted: 'Uchukuzi',
-  packed: 'Imepakiwa',
-  at_bus: 'Imepakiwa',
-  transit: 'Safarini',
-  in_transit: 'Safarini',
+  received: 'Imekubaliwa',
+  pickup: 'Tunafuata',
+  agent_collects: 'Tunafuata',
+  haul_delivers_to_office: 'Tunafuata',
+  contacted: 'Tunafuata',
+  packed: 'Imepokelewa',
+  at_bus: 'Imepokelewa',
+  picked_up: 'Imepokelewa',
+  transit: 'Imetumwa',
+  in_transit: 'Imetumwa',
   arrived: 'Imefika',
   handed: 'Imewasili',
   delivered: 'Imewasili',
@@ -118,6 +119,7 @@ const state = {
   mode: 'login',
   needsCompanySetup: false,
   unsubscribers: [],
+  editingQuoteId: null,
 };
 
 let countdownTimer = null;
@@ -197,6 +199,13 @@ function esc(value) {
 function digits(phone) {
   return String(phone || '').replace(/\D/g, '');
 }
+function smsPhone(value) {
+  const raw = digits(value);
+  if (raw.startsWith('0') && raw.length === 10) return `255${raw.slice(1)}`;
+  if (raw.startsWith('255') && raw.length >= 12) return raw.slice(0, 12);
+  if (raw.length === 9) return `255${raw}`;
+  return raw;
+}
 function when(value) {
   const ms = value?.toDate ? value.toDate().getTime() : new Date(value || 0).getTime();
   if (!ms) return '—';
@@ -216,7 +225,7 @@ function isBusParcel(order) {
   if (['express', 'air', 'flight', 'ndege'].includes(mode)) return false;
   if (norm(order.parcelScope) === 'outside') return true;
   if (String(order.outsideDestinationCity || order.outsideDestinationLabel || '').trim()) return true;
-  return ['road', 'bus', 'ferry'].includes(mode);
+  return ['road', 'bus', 'ferry', 'standard'].includes(mode);
 }
 function weightOf(order) {
   const parsed = Number(String(order.outsideParcelWeightKg || order.weightKg || '').replace(/[^\d.]/g, ''));
@@ -232,62 +241,160 @@ function phoneLine(phone) {
   const dial = digits(raw);
   return dial ? `<a href="tel:${esc(dial)}">${esc(raw)}</a>` : esc(raw);
 }
-function trackLabel(step, mode) {
-  if (!step) return '';
-  if (step.key === 'pickup') return mode === 'haul_delivers_to_office' ? 'Kuleta ofisini' : 'Wakala anachukua';
-  return step.label;
+function trackLabel(step) {
+  return step?.label || '';
 }
 function trackIndex(item) {
-  if (item?.trackStep) {
-    const found = TRACK.findIndex((step) => step.key === item.trackStep);
-    if (found >= 0) return found;
-  }
-  const status = item?.shipmentStatus;
-  if (status === 'accepted') return 0;
-  if (status === 'contacted' || status === 'pickup_scheduled') return item?.pickupMode ? 1 : 0;
-  if (status === 'picked_up' || status === 'at_bus') return 2;
-  if (status === 'in_transit') return 3;
-  if (status === 'arrived') return 4;
-  if (status === 'delivered') return 5;
+  const step = String(item?.trackStep || '');
+  const status = String(item?.shipmentStatus || '');
+  if (status === 'delivered' || step === 'handed') return TRACK.length;
+  if (status === 'arrived' || step === 'arrived') return 4;
+  if (status === 'in_transit' || step === 'transit') return 3;
+  if (status === 'picked_up' || status === 'at_bus' || step === 'packed') return 2;
+  if (step === 'pickup' || status === 'contacted' || status === 'pickup_scheduled' || item?.pickupMode) return 1;
+  if (status === 'accepted' || step === 'received') return 0;
   return -1;
+}
+function publicStatus(item) {
+  const index = trackIndex(item);
+  if (index >= TRACK.length) return 'Imekabidhiwa';
+  if (index >= 0) return TRACK[index].label;
+  if (item?.transporterVerifiedAt && item?.shipmentStatus === 'assigned') return 'Imethibitishwa';
+  return STATUS_LABEL[item?.shipmentStatus] || '—';
 }
 function matchedRoute(item) {
   return state.routes.find((route) => route.id === item?.routeId) || null;
 }
 function cargoPhotoList(item) {
-  const list = Array.isArray(item.cargoPhotos)
-    ? item.cargoPhotos
-    : Array.isArray(item.photoUrls)
-      ? item.photoUrls
-      : Array.isArray(item.images)
-        ? item.images
-        : [];
-  const urls = list.map((entry) => (typeof entry === 'string' ? entry : entry?.url || entry?.downloadURL || '')).filter(Boolean);
-  if (item.parcelPhotoUrl) urls.unshift(item.parcelPhotoUrl);
-  return [...new Set(urls)];
+  const list = Array.isArray(item?.parcelPhotoUrls)
+    ? item.parcelPhotoUrls
+    : Array.isArray(item?.cargoPhotos)
+      ? item.cargoPhotos
+      : Array.isArray(item?.photoUrls)
+        ? item.photoUrls
+        : Array.isArray(item?.images)
+          ? item.images
+          : [];
+  const isPhotoUrl = (url) => /^(https?:\/\/|\/|\.\/)/i.test(String(url || '').trim());
+  const urls = list
+    .map((entry) => (typeof entry === 'string' ? entry : entry?.url || entry?.downloadURL || ''))
+    .map((url) => String(url || '').trim())
+    .filter(isPhotoUrl);
+  if (item?.parcelPhotoUrl && isPhotoUrl(item.parcelPhotoUrl)) {
+    urls.unshift(String(item.parcelPhotoUrl).trim());
+  }
+  return [...new Set(urls)].slice(0, 8);
+}
+
+/** Always-visible cargo photo block — large hero, not a tiny chip. */
+function renderCargoPhotos(item) {
+  void ensureCargoPhotos(item);
+  const photos = cargoPhotoList(item);
+  if (!photos.length) {
+    return `<section class="mzigo-photo-block missing" data-photo-ship="${esc(item.id)}">
+      <p class="mzigo-photo-label">Picha ya mzigo</p>
+      <p class="mzigo-photo-empty">Inatafutwa picha… kama haionekani, fungua oda tena.</p>
+    </section>`;
+  }
+  const main = photos[0];
+  const thumbs = photos.slice(1);
+  return `<section class="mzigo-photo-block" data-photo-ship="${esc(item.id)}">
+    <p class="mzigo-photo-label">Picha ya mzigo</p>
+    <a class="mzigo-photo-hero" href="${esc(main)}" target="_blank" rel="noopener">
+      <img src="${esc(main)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="eager" />
+    </a>
+    ${thumbs.length
+      ? `<div class="cargo-photos">${thumbs.map((url) => `<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="lazy" /></a>`).join('')}</div>`
+      : ''}
+  </section>`;
+}
+
+const photoEnrichPending = Object.create(null);
+const photoEnrichDone = Object.create(null);
+
+async function ensureCargoPhotos(item) {
+  if (!item?.id) return item;
+  if (cargoPhotoList(item).length) {
+    photoEnrichDone[item.id] = true;
+    return item;
+  }
+  if (photoEnrichPending[item.id] || photoEnrichDone[item.id]) return item;
+  photoEnrichPending[item.id] = true;
+  try {
+    let photos = [];
+    // 1) Admin-backed API (works even when carriers cannot read orders)
+    if (state.user) {
+      try {
+        const payload = await portalCall(`/carrier/portal/photos?shipmentId=${encodeURIComponent(item.id)}`);
+        photos = Array.isArray(payload?.parcelPhotoUrls) ? payload.parcelPhotoUrls : [];
+        if (!photos.length && payload?.parcelPhotoUrl) photos = [payload.parcelPhotoUrl];
+      } catch (apiError) {
+        console.warn('portal photos api failed', apiError?.message || apiError);
+      }
+    }
+    // 2) Direct order read fallback
+    if (!photos.length) {
+      try {
+        const orderId = String(item.orderId || item.id).trim();
+        const snap = await getDoc(doc(db, 'orders', orderId));
+        if (snap.exists()) {
+          const order = snap.data() || {};
+          photos = cargoPhotoList(order);
+          const extras = {};
+          if (order.quoteStatus) extras.quoteStatus = String(order.quoteStatus).trim();
+          if (order.outsideParcelSize) extras.outsideParcelSize = String(order.outsideParcelSize).trim();
+          if (order.fareLabel) extras.fareLabel = String(order.fareLabel).trim();
+          if (Object.keys(extras).length) {
+            Object.assign(item, extras);
+            const idx = state.shipments.findIndex((row) => row.id === item.id);
+            if (idx >= 0) state.shipments[idx] = { ...state.shipments[idx], ...extras };
+            updateDoc(doc(db, 'carrierShipments', item.id), extras).catch(() => undefined);
+          }
+        }
+      } catch (orderError) {
+        console.warn('order photo read failed', orderError?.message || orderError);
+      }
+    }
+    photos = photos.map((url) => String(url || '').trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 6);
+    if (photos.length) {
+      const patch = {
+        parcelPhotoUrls: photos,
+        parcelPhotoUrl: photos[0],
+        cargoPhotos: photos,
+      };
+      Object.assign(item, patch);
+      const idx = state.shipments.findIndex((row) => row.id === item.id);
+      if (idx >= 0) state.shipments[idx] = { ...state.shipments[idx], ...patch };
+      updateDoc(doc(db, 'carrierShipments', item.id), patch).catch(() => undefined);
+      render();
+      photoEnrichDone[item.id] = true;
+    }
+    // If still empty, allow retry later (do not permanently mark done).
+  } catch (error) {
+    console.warn('ensureCargoPhotos failed', error);
+  } finally {
+    delete photoEnrichPending[item.id];
+  }
+  return item;
 }
 
 function orderFacts(item) {
+  void ensureCargoPhotos(item);
   const route = matchedRoute(item);
   const value = declaredValueOf(item);
   const schedule = item.routeLabel || (route ? `${route.origin} → ${route.destination}` : '');
-  const photos = cargoPhotoList(item);
-  const photoBlock = photos.length
-    ? `<div class="cargo-photos">${photos.slice(0, 8).map((url) => `<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="Cargo photo" /></a>`).join('')}</div>`
-    : '<p class="muted">No cargo photos attached.</p>';
   const authorized = item.carrierId === state.carrier?.id || (item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id);
-  return `${photoBlock}<dl class="facts">
-    <div><dt>Weight</dt><dd>${esc(item.weightKg || 0)} kg${item.parcelDescription ? ` · ${esc(item.parcelDescription)}` : ''}</dd></div>
+  return `${renderCargoPhotos(item)}<dl class="facts">
+    <div><dt>Uzito</dt><dd>${esc(item.weightKg || 0)} kg${item.parcelDescription ? ` · ${esc(item.parcelDescription)}` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</dd></div>
     <div><dt>Pickup</dt><dd>${esc(item.pickupLabel || item.origin || '—')}</dd></div>
-    <div><dt>Destination</dt><dd>${esc(item.destination || item.dropoffLabel || item.routeLabel || '—')}</dd></div>
-    <div><dt>Sender</dt><dd>${authorized ? esc(item.customerName || '—') : 'Available after accept'}</dd></div>
-    <div><dt>Recipient</dt><dd>${authorized ? esc(item.recipientName || '—') : 'Available after accept'}</dd></div>
-    <div><dt>Sender phone</dt><dd>${authorized ? phoneLine(item.customerPhone) : '—'}</dd></div>
-    <div><dt>Recipient phone</dt><dd>${authorized ? phoneLine(item.recipientPhone) : '—'}</dd></div>
-    <div><dt>Declared value</dt><dd>${value ? esc(money(value)) : '—'}</dd></div>
-    <div><dt>Distance</dt><dd>${esc(item.distanceLabel || (item.distanceKm ? `${item.distanceKm} km` : '—'))}</dd></div>
-    <div><dt>Route</dt><dd>${esc(schedule || '—')}</dd></div>
-    <div><dt>Price</dt><dd>${money(priceOf(item))}</dd></div>
+    <div><dt>Marudio</dt><dd>${esc(item.destination || item.dropoffLabel || item.routeLabel || '—')}</dd></div>
+    <div><dt>Mtumaji</dt><dd>${authorized ? esc(item.customerName || '—') : 'Baada ya kuchukua oda'}</dd></div>
+    <div><dt>Mpokeaji</dt><dd>${authorized ? esc(item.recipientName || '—') : 'Baada ya kuchukua oda'}</dd></div>
+    <div><dt>Simu mtumaji</dt><dd>${authorized ? phoneLine(item.customerPhone) : '—'}</dd></div>
+    <div><dt>Simu mpokeaji</dt><dd>${authorized ? phoneLine(item.recipientPhone) : '—'}</dd></div>
+    <div><dt>Thamani</dt><dd>${value ? esc(money(value)) : '—'}</dd></div>
+    <div><dt>Safari</dt><dd>${esc(schedule || '—')}</dd></div>
+    <div><dt>Bei</dt><dd>${priceOf(item) > 0 ? money(priceOf(item)) : 'Bei baada ya kampuni'}</dd></div>
   </dl>`;
 }
 function cashOf(order) {
@@ -1087,6 +1194,12 @@ function listen() {
     render();
   }));
   watch(query(collection(db, 'carrierShipments'), where('offeredCarrierId', '==', id)), (rows) => {
+    const incoming = rows.filter((item) => item.shipmentStatus === 'assigned' && !state.knownOfferIds?.has(item.id));
+    if (state.offersReady) {
+      incoming.forEach((item) => announceIncomingOffer(item));
+    }
+    state.knownOfferIds = new Set(rows.filter((item) => item.shipmentStatus === 'assigned').map((item) => item.id));
+    state.offersReady = true;
     buckets.offered = rows;
     publishShipments();
   });
@@ -1104,15 +1217,82 @@ function listen() {
     const fresh = next.filter((item) => !prevIds.has(item.id) && !item.readAt && item.read !== true);
     state.notes = next;
     refreshNoteBadge();
-    if (state.notesReady && fresh.length) playOfferChime();
+    if (state.notesReady && fresh.some((item) => item.type === 'carrier_offer' || /oda/i.test(item.title || ''))) {
+      fresh.filter((item) => item.type === 'carrier_offer' || /oda/i.test(item.title || '')).forEach((item) => {
+        if (state.knownOfferIds?.has(item.orderId)) return;
+        announceIncomingOffer({
+          id: item.orderId || item.id,
+          orderNumber: item.body || item.title || 'Oda mpya',
+          destination: '',
+        });
+      });
+    }
     state.notesReady = true;
   });
+}
+
+let presenceTimer = null;
+let presenceBound = false;
+
+async function pulsePortalPresence() {
+  if (!state.user || !state.carrier?.id) return;
+  try {
+    await updateDoc(doc(db, 'carriers', state.carrier.id), {
+      portalOnlineAt: serverTimestamp(),
+      portalOnlineUid: state.user.uid,
+      portalOnlineEmail: state.user.email || '',
+    });
+  } catch (error) {
+    console.warn('portal presence write failed', error?.message || error);
+  }
+  try {
+    await portalCall('/carrier/portal/presence', {});
+  } catch (error) {
+    // Matching rematch needs the API; Firestore heartbeat above still marks the desk live.
+    console.warn('portal presence api failed', error?.message || error);
+  }
+}
+
+function stopPortalPresence() {
+  if (presenceTimer) {
+    clearInterval(presenceTimer);
+    presenceTimer = null;
+  }
+}
+
+function startPortalPresence() {
+  stopPortalPresence();
+  if (!state.carrier?.id) return;
+  enableOfferNotifications();
+  pulsePortalPresence();
+  presenceTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return;
+    pulsePortalPresence();
+  }, 45_000);
+  if (!presenceBound) {
+    presenceBound = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && state.carrier?.id) pulsePortalPresence();
+    });
+    window.addEventListener('beforeunload', () => {
+      // Best-effort offline mark; matching window is short either way.
+      if (!state.carrier?.id) return;
+      try {
+        updateDoc(doc(db, 'carriers', state.carrier.id), {
+          portalOnlineAt: deleteField(),
+        });
+      } catch {
+        /* ignore unload write */
+      }
+    });
+  }
 }
 
 async function loadSession(user) {
   state.user = user;
   state.isAdmin = user?.email?.toLowerCase() === ADMIN_EMAIL;
   if (!user) {
+    stopPortalPresence();
     state.carrier = null;
     state.needsCompanySetup = false;
     listen();
@@ -1158,6 +1338,7 @@ async function loadSession(user) {
   statusEl.textContent = statusText;
   statusEl.classList.toggle('verified', isVerifiedCarrier(state.carrier));
   listen();
+  startPortalPresence();
   render();
   refreshNoteBadge();
 }
@@ -1198,10 +1379,101 @@ function cashTotals(rows) {
   return { collected, pending, haulFee };
 }
 
-function offerCountdownBlock(item) {
-  const until = offerExpiresMs(item);
-  if (!until) return '';
-  return `<div class="countdown" data-offer-until="${until}"><span>Kubali ndani ya</span><strong>${formatCountdown(until - Date.now())}</strong></div>`;
+function offerCountdownBlock() {
+  return '';
+}
+
+function carrierIsOnline(carrier, now = Date.now()) {
+  const raw = carrier?.portalOnlineAt;
+  const ms = typeof raw?.toMillis === 'function'
+    ? raw.toMillis()
+    : typeof raw?.toDate === 'function'
+      ? raw.toDate().getTime()
+      : Date.parse(raw || '');
+  return Number.isFinite(ms) && now - ms >= 0 && now - ms <= 3 * 60 * 1000;
+}
+
+let offerAlarmTimer = null;
+function playOfferAlarm() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    if (!chimeCtx) chimeCtx = new AudioCtx();
+    const ctx = chimeCtx;
+    ctx.resume().catch(() => null);
+    const start = ctx.currentTime + 0.02;
+    [0, 0.45, 0.9].forEach((offset) => {
+      [784, 988, 1318].forEach((freq, index) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = freq;
+        const at = start + offset + index * 0.08;
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(0.22, at + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(at);
+        osc.stop(at + 0.24);
+      });
+    });
+  } catch {
+    /* sound optional */
+  }
+}
+
+function announceIncomingOffer(item) {
+  const title = 'Oda mpya ya mzigo';
+  const body = [item?.orderNumber || 'Oda', item?.destination || item?.dropoffLabel || ''].filter(Boolean).join(' · ');
+  playOfferAlarm();
+  if (offerAlarmTimer) clearTimeout(offerAlarmTimer);
+  offerAlarmTimer = setTimeout(() => playOfferAlarm(), 1400);
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    const note = new Notification(title, {
+      body,
+      tag: `haul-offer-${item?.id || 'new'}`,
+      requireInteraction: true,
+      renotify: true,
+    });
+    note.onclick = () => {
+      window.focus();
+      if (item?.id) location.hash = `#/assignment/${item.id}`;
+      note.close();
+    };
+  } catch {
+    /* browser blocked the banner */
+  }
+}
+
+async function enableOfferNotifications() {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission === 'default') {
+    try { await Notification.requestPermission(); } catch { /* ignore */ }
+  }
+}
+
+function statusUploadPanel(item) {
+  if (!item || item.carrierId !== state.carrier?.id) return '';
+  if (['cancelled'].includes(String(item.shipmentStatus || ''))) return '';
+  const steps = [
+    { key: 'pickup', status: 'contacted', label: 'Tunafuata' },
+    { key: 'packed', status: 'picked_up', label: 'Imepokelewa' },
+    { key: 'transit', status: 'in_transit', label: 'Imetumwa' },
+    { key: 'arrived', status: 'arrived', label: 'Imefika' },
+    { key: 'handed', status: 'delivered', label: 'Imekabidhiwa' },
+  ];
+  const current = String(item.trackStep || '');
+  const buttons = steps.map((step) => {
+    const on = current === step.key || item.shipmentStatus === step.status;
+    return `<button class="btn ${on ? 'primary' : 'line'} small" type="button" data-act="set-status" data-step="${step.key}" data-status="${step.status}" data-label="${esc(step.label)}" data-id="${esc(item.id)}">${esc(step.label)}</button>`;
+  }).join('');
+  return `<div class="price-quote-panel status-upload">
+    <p class="quote-editor-title">Weka status ya mzigo</p>
+    <p class="muted quote-hint">Mteja anaiona kwenye app mara moja.</p>
+    <div class="actions status-actions">${buttons}</div>
+  </div>`;
 }
 
 function offerHeroCard(item) {
@@ -1251,24 +1523,57 @@ function dashboard() {
     <article class="stat"><span>In transit</span><strong>${transit.length}</strong></article>
     <article class="stat"><span>Completed</span><strong>${completed.length}</strong></article>
   </div>`;
-  const offerTable = offers.length
-    ? `<section class="panel"><div class="section-head"><h2>Available cargo orders</h2></div>${ordersTable(offers, true)}</section>`
-    : '<p class="empty">No available offers right now. Eligible orders for your regions will appear here.</p>';
+  const activeOwned = [...accepted, ...transit];
+  const ownedCards = activeOwned.length
+    ? `<section class="panel"><div class="section-head"><h2>Mizigo yako</h2></div>
+        <div class="order-list">${activeOwned.map((item) => {
+          void ensureCargoPhotos(item);
+          return `<article class="panel order-card offer-card">
+            <header><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>${badge(item.shipmentStatus)}</header>
+            <p class="offer-route">${esc(item.pickupLabel || item.origin || 'Dar')} → ${esc(dropOffLabel(item))}</p>
+            ${renderCargoPhotos(item)}
+            ${quotePanel(item, { force: true })}
+            ${statusUploadPanel(item)}
+            <div class="actions"><a class="btn line small" href="#/assignment/${esc(item.id)}">Fungua</a></div>
+          </article>`;
+        }).join('')}</div></section>`
+    : '';
+  const offerCards = offers.length
+    ? `<section class="panel"><div class="section-head"><h2>Oda mpya za kuchukua</h2></div>
+        <div class="order-list">${offers.map((item) => {
+          void ensureCargoPhotos(item);
+          return `<article class="panel order-card offer-card">
+            <header><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>${offerCountdownBlock(item)}</header>
+            <p class="offer-route">${esc(item.pickupLabel || item.origin || 'Dar')} → ${esc(dropOffLabel(item))}</p>
+            <p class="muted">${esc(item.weightKg || 0)} kg${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''} · thamani ${money(declaredValueOf(item))}</p>
+            ${renderCargoPhotos(item)}
+            ${quotePanel(item, { force: true })}
+            ${statusUploadPanel(item)}
+            <div class="actions">
+              ${item.transporterVerifiedAt
+                ? `<button class="btn primary small" data-act="accept" data-id="${esc(item.id)}" type="button">Chukua oda</button>`
+                : `<button class="btn primary small" data-act="verify" data-id="${esc(item.id)}" type="button">Thibitisha oda</button>`}
+              <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a>
+              <button class="btn line small" data-act="reject" data-id="${esc(item.id)}" type="button">Kataa</button>
+            </div>
+          </article>`;
+        }).join('')}</div></section>`
+    : '<p class="empty">Hakuna oda mpya sasa. Oda zinazofaa mikoa yako zitaonekana hapa.</p>';
   if (offers.length) startCountdownTicker();
   else stopCountdownTicker();
-  return `${welcome}${offerTable}`;
+  return `${welcome}${offerCards}${ownedCards}`;
 }
 
 function ordersTable(rows, showAccept) {
   if (!rows.length) return '<p class="empty">No orders in this list.</p>';
   return `<div class="table-wrap"><table>
     <thead><tr>
-      <th>Reference</th><th>Pickup</th><th>Destination</th><th>Cargo</th><th>Photos</th>
-      <th>Distance</th><th>Price</th><th>Status</th><th></th>
+      <th>Reference</th><th>Pickup</th><th>Destination</th><th>Cargo</th><th>Picha</th>
+      <th>Price</th><th>Status</th><th></th>
     </tr></thead>
     <tbody>${rows.map((item) => {
-      const photos = Array.isArray(item.cargoPhotos) ? item.cargoPhotos : (item.photoUrls || item.images || []);
-      const photoCount = Array.isArray(photos) ? photos.length : (item.parcelPhotoUrl ? 1 : 0);
+      void ensureCargoPhotos(item);
+      const photos = cargoPhotoList(item);
       const actions = showAccept && item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id
         ? `${item.transporterVerifiedAt
           ? `<button class="btn primary small" data-act="accept" data-id="${esc(item.id)}" type="button">Accept</button>`
@@ -1280,9 +1585,8 @@ function ordersTable(rows, showAccept) {
         <td>${esc(item.pickupLabel || item.origin || '—')}</td>
         <td>${esc(item.destination || item.dropoffLabel || item.routeLabel || '—')}</td>
         <td>${esc(item.parcelDescription || item.cargoDescription || 'Cargo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}</td>
-        <td>${photoCount ? `${photoCount} photo${photoCount > 1 ? 's' : ''}` : '—'}</td>
-        <td>${esc(item.distanceLabel || (item.distanceKm ? `${item.distanceKm} km` : '—'))}</td>
-        <td>${money(priceOf(item))}</td>
+        <td>${photos.length ? `<img class="table-photo" src="${esc(photos[0])}" alt="Mzigo" referrerpolicy="no-referrer" />` : '—'}</td>
+        <td>${priceOf(item) > 0 ? money(priceOf(item)) : 'Bei baada ya kampuni'}</td>
         <td>${badge(item.shipmentStatus)}</td>
         <td class="actions">${actions}</td>
       </tr>`;
@@ -1309,11 +1613,79 @@ function orderBucket(item) {
   return '';
 }
 
+function cargoPhoto(item) {
+  const url = cargoPhotoList(item)[0] || '';
+  return url ? `<img class="cargo-photo" src="${esc(url)}" alt="Mzigo" />` : '';
+}
+
+function isOutsideCompanyJob(item) {
+  const qs = String(item?.quoteStatus || '').trim();
+  if (qs === 'awaiting_company' || qs === 'offered' || qs === 'confirmed') return true;
+  if (item?.outsideParcelSize || item?.outsideShippingMode || item?.outsideDestinationCity) return true;
+  if (cargoPhotoList(item).length) return true;
+  if (/bei baada|kampuni/i.test(`${item?.fareLabel || ''} ${item?.totalLabel || ''}`)) return true;
+  return false;
+}
+
+function needsCustomerPrice(item) {
+  if (!item) return false;
+  if (['cancelled', 'delivered'].includes(String(item.shipmentStatus || ''))) return false;
+  const qs = String(item.quoteStatus || '').trim();
+  if (qs === 'confirmed' && priceOf(item) > 0) return false;
+  const offeredToMe = item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id;
+  const ownedByMe = item.carrierId === state.carrier?.id;
+  if (!offeredToMe && !ownedByMe && !isOutsideCompanyJob(item)) return false;
+  return qs !== 'confirmed' || priceOf(item) <= 0;
+}
+
+function quotePanel(item, opts = {}) {
+  if (['cancelled', 'delivered'].includes(String(item.shipmentStatus || ''))) return '';
+  const qs = String(item.quoteStatus || '').trim();
+  const force = Boolean(opts.force) || needsCustomerPrice(item);
+  const editing = Boolean(opts.editing) || state.editingQuoteId === item.id;
+  if (qs === 'confirmed' && priceOf(item) > 0 && !editing) {
+    const fee = Math.round(Number(item.haulFee) || 0);
+    return `<div class="price-quote-panel is-confirmed">
+      <p class="quote-editor-title">Bei ya mzigo</p>
+      <p><strong>${money(priceOf(item))}</strong> · mteja amethibitisha.${fee > 0 ? ` Commission ${money(fee)}.` : ''}</p>
+    </div>`;
+  }
+
+  if (qs === 'offered' && priceOf(item) > 0 && !editing) {
+    const draft = Math.round(Number(item.quoteDraftCommissionTzs) || Number(item.haulFee) || 0);
+    return `<div class="price-quote-panel is-sent">
+      <p class="quote-editor-title">Bei imetumwa kwa mtumaji</p>
+      <p><strong>${money(priceOf(item))}</strong></p>
+      <p class="muted quote-hint">${draft > 0 ? `Commission draft ${money(draft)} · inahesabiwa unapochukua oda.` : 'Inasubiri mteja kuthibitisha kwenye app.'}</p>
+      <button class="btn line small" type="button" data-edit-quote="${esc(item.id)}">Badilisha bei</button>
+    </div>`;
+  }
+
+  if (!force && !editing) return '';
+
+  const rate = Number(companyStanding().feePercent || 12);
+  const seed = priceOf(item) > 0 ? priceOf(item) : '';
+  const seedFee = seed ? Math.round(seed * (rate / 100)) : '';
+  return `<form class="quote-form quote-form-stack price-quote-panel" data-quote="${esc(item.id)}">
+    <p class="quote-editor-title">Weka bei ya kutuma mzigo</p>
+    <p class="muted quote-hint">Andika bei ya usafirishaji. Mtumaji ataiona kwenye app ya Haul na atathibitisha au kukataa.</p>
+    <label>Bei ya usafirishaji (TZS)
+      <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="mfano 25000" required autofocus />
+    </label>
+    <label>Commission ya Haul (TZS) · ~${rate}%
+      <input name="commission" inputmode="numeric" type="number" min="0" step="100" value="${esc(seedFee)}" placeholder="mfano 3000" />
+    </label>
+    <p class="muted quote-hint">Commission inahesabiwa tu unapochukua oda.</p>
+    <button class="btn primary" type="submit">Tuma bei kwa mtumaji</button>
+  </form>`;
+}
+
 function orderActions(item) {
   const bucket = orderBucket(item);
   const id = esc(item.id);
   if (bucket === 'new') return `<button class="btn primary small" data-act="verify" data-id="${id}" type="button">Verify order</button>`;
   if (bucket === 'verified' && !item.carrierId) return `<button class="btn primary small" data-act="accept" data-id="${id}" type="button">Accept</button>`;
+  if (bucket === 'verified' && item.quoteStatus && item.quoteStatus !== 'confirmed') return '';
   if (bucket === 'verified') return `<button class="btn primary small" data-act="start-transit" data-id="${id}" type="button">Start journey</button>`;
   if (bucket === 'transit') {
     return `<button class="btn primary small" data-act="journey" data-id="${id}" type="button">Update journey</button>
@@ -1337,13 +1709,56 @@ function ordersDesk(tab) {
           <header><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>${badge(item.journeyStatus || item.shipmentStatus)}</header>
           <p>${esc(item.customerName || 'Customer')} · ${esc(item.customerPhone || 'No phone')}</p>
           <p>${esc(item.pickupLabel || item.origin || 'Pickup')} → ${esc(item.destination || 'Destination')}</p>
-          <p class="muted">${esc(item.parcelDescription || 'Cargo')} · value ${money(item.declaredValueTzs || 0)} · fee ${money(priceOf(item))}</p>
+          <p class="muted">${esc(item.parcelDescription || 'Cargo')} · ${esc(item.outsideParcelSize || '')} · value ${money(item.declaredValueTzs || 0)} · fee ${priceOf(item) > 0 ? money(priceOf(item)) : 'Bei haijawekwa'}</p>
+          ${renderCargoPhotos(item)}
+          ${quotePanel(item, { force: current === 'new' || current === 'verified' || isOutsideCompanyJob(item) })}
           <p class="muted">Latest: ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(latest.at)}` : ''}${latest.locationSource === 'manual' ? ' · manual location' : ''}</p>
           <div class="actions">${orderActions(item)} <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a></div>
         </article>`;
       }).join('')}</div>`
     : '<p class="empty">No orders in this tab.</p>';
   return `<div class="order-tabs">${tabs}</div>${body}`;
+}
+
+async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
+  const standing = companyStanding();
+  const rate = Number(standing.feePercent || 12) / 100;
+  const draftCommission = Math.max(
+    0,
+    Math.min(amount, Math.round(Number(commissionTzs) || amount * rate))
+  );
+  const label = `TZS ${amount.toLocaleString('en-US')}`;
+  try {
+    await portalCall('/carrier/portal/quote', {
+      shipmentId,
+      amountTzs: amount,
+      commissionTzs: draftCommission,
+    });
+    return;
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (!/404|not found|Cannot POST/i.test(message)) throw error;
+  }
+  const shipmentSnap = await getDoc(doc(db, 'carrierShipments', shipmentId));
+  if (!shipmentSnap.exists()) throw new Error('Order not found.');
+  const shipment = shipmentSnap.data();
+  const orderId = shipment.orderId || shipmentId;
+  // Draft only — haulFee / commission counts when the company accepts the order.
+  await updateDoc(doc(db, 'carrierShipments', shipmentId), {
+    cashExpected: amount,
+    quoteDraftCommissionTzs: draftCommission,
+    quoteDraftFeeRate: rate,
+    quoteStatus: 'offered',
+    fareLabel: label,
+    quotedAt: serverTimestamp(),
+  });
+  await setDoc(doc(db, 'orders', orderId), {
+    quoteStatus: 'offered',
+    carrierQuoteTzs: amount,
+    fareLabel: label,
+    totalLabel: label,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 }
 
 async function portalCall(path, body) {
@@ -1361,6 +1776,61 @@ async function portalCall(path, body) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Request failed.');
   return payload;
+}
+
+/** Keep the customer Haul app in sync when the company updates shipment status locally. */
+function customerMatchFromShipment(shipment) {
+  const status = String(shipment?.shipmentStatus || '').toLowerCase();
+  const step = String(shipment?.trackStep || '').trim();
+  if (step === 'handed' || status === 'delivered') return 'accepted';
+  if (shipment?.carrierId) return 'accepted';
+  if (['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus', 'in_transit', 'arrived'].includes(status)) {
+    return 'accepted';
+  }
+  if (shipment?.offeredCarrierId || status === 'assigned') return 'offered';
+  return 'matching';
+}
+
+async function mirrorCustomerOrder(shipmentId, shipment, extras = {}) {
+  const orderId = String(shipment?.orderId || shipmentId || '').trim();
+  if (!orderId) return;
+  const status = String(shipment?.shipmentStatus || '').toLowerCase();
+  const trackStep = String(shipment?.trackStep || '').trim();
+  const pickupMode = String(shipment?.pickupMode || '').trim();
+  const latest = shipment?.latestJourney || {};
+  const matchStatus = customerMatchFromShipment(shipment);
+  const patch = {
+    carrierShipmentId: orderId,
+    carrierMatchStatus: matchStatus,
+    carrierRouteLabel: String(shipment?.routeLabel || '').trim(),
+    carrierPickupMode: pickupMode || deleteField(),
+    carrierTrackStep: trackStep || deleteField(),
+    carrierJourneyStatus: latest.status || shipment?.journeyStatus || status || '',
+    carrierJourneyMessage: latest.message || extras.message || '',
+    carrierLocationLabel: latest.locationName || '',
+    carrierLocationSource: latest.locationSource || '',
+    carrierEtaLabel: latest.eta || '',
+    carrierJourneyAt: latest.at || stamp(),
+    updatedAt: serverTimestamp(),
+    ...extras,
+  };
+  if (matchStatus === 'matching') {
+    patch.carrierName = deleteField();
+    patch.carrierAgentName = deleteField();
+    patch.carrierPhone = deleteField();
+    patch.carrierBusName = deleteField();
+  }
+  if (status === 'delivered' || trackStep === 'handed') {
+    patch.status = 'delivered';
+    patch.logisticsStatus = 'completed';
+    patch.carrierMatchStatus = 'accepted';
+    patch.deliveredAt = serverTimestamp();
+  }
+  try {
+    await setDoc(doc(db, 'orders', orderId), patch, { merge: true });
+  } catch (error) {
+    console.warn('customer status mirror failed', orderId, error?.message || error);
+  }
 }
 
 function availableOrdersPage() {
@@ -1618,13 +2088,17 @@ function assignmentPage(id) {
   const destMap = item.dropoffLatitude && item.dropoffLongitude
     ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(`${item.pickupLatitude || ''},${item.pickupLongitude || ''}`)}&destination=${item.dropoffLatitude},${item.dropoffLongitude}`
     : map;
+  void ensureCargoPhotos(item);
   return `<section class="panel">
     <p class="offer-route">${esc(item.orderNumber || item.id.slice(0, 8))} · ${esc(item.destination || item.routeLabel || 'Cargo')}</p>
     <p class="muted">${badge(item.shipmentStatus)}</p>
     ${offered ? offerCountdownBlock(item) : ''}
+    ${quotePanel(item, { force: true })}
+    ${statusUploadPanel(item)}
+    ${renderCargoPhotos(item)}
     ${orderFacts(item)}
     <div class="actions" style="margin-top:14px">
-      ${offered ? `${item.transporterVerifiedAt ? `<button class="btn primary" data-act="accept" data-id="${esc(item.id)}" type="button">Accept order</button>` : `<button class="btn primary" data-act="verify" data-id="${esc(item.id)}" type="button">Verify order</button>`}<button class="btn line" data-act="reject" data-id="${esc(item.id)}" type="button">Decline</button>` : ''}
+      ${offered ? `${item.transporterVerifiedAt ? `<button class="btn primary" data-act="accept" data-id="${esc(item.id)}" type="button">Chukua oda</button>` : `<button class="btn primary" data-act="verify" data-id="${esc(item.id)}" type="button">Thibitisha oda</button>`}<button class="btn line" data-act="reject" data-id="${esc(item.id)}" type="button">Kataa</button>` : ''}
       ${owned ? `<a class="btn primary" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
       <a class="btn line" href="${destMap}" target="_blank" rel="noopener">Directions</a>
     </div>
@@ -1647,7 +2121,7 @@ function stickerPage(id) {
       <div class="tag-hole" aria-hidden="true"></div>
       <header>
         <img src="./assets/logo.svg" alt="" />
-        <div><strong>Bus Cargo Agents</strong><span>Mzigo wa basi</span></div>
+        <div><strong>${esc(state.carrier?.companyName || item.carrierCompanyName || 'HAUL')}</strong><span>Risiti ya mzigo</span></div>
         <em>${esc(code)}</em>
       </header>
       <p class="sticker-route">${esc(origin)} <b>→</b> ${esc(destination)}</p>
@@ -2137,7 +2611,22 @@ function scoreCarrier(order, carrier, routes, vehicles) {
 }
 
 function shipmentCopy(order, orderId) {
-  const amount = feeSplit(cashOf(order));
+  const quoteStatus = String(order.quoteStatus || '').trim();
+  const awaitingQuote = quoteStatus === 'awaiting_company';
+  const cashAmount = awaitingQuote ? 0 : cashOf(order);
+  const amount = feeSplit(cashAmount);
+  const photos = Array.isArray(order.parcelPhotoUrls)
+    ? order.parcelPhotoUrls.map((url) => String(url || '').trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 6)
+    : [];
+  const meters = Number(order.distanceMeters);
+  const distanceMeters = Number.isFinite(meters) && meters > 0 ? Math.round(meters) : 0;
+  const distanceKm = distanceMeters > 0
+    ? Math.round((distanceMeters / 1000) * 10) / 10
+    : Number(order.distanceKm || order.routeDistanceKm) > 0
+      ? Number(order.distanceKm || order.routeDistanceKm)
+      : 0;
+  const distanceLabel = String(order.distanceLabel || '').trim()
+    || (distanceKm >= 1 ? `${distanceKm} km` : distanceMeters > 0 ? `${distanceMeters} m` : '');
   return {
     orderId,
     orderNumber: order.orderNumber || order.parcelCode || orderId.slice(0, 6).toUpperCase(),
@@ -2153,15 +2642,23 @@ function shipmentCopy(order, orderId) {
     origin: orderOrigin(order),
     destination: orderDestination(order),
     parcelDescription: order.parcelTypeLabel || order.parcelDescription || 'Cargo',
+    outsideParcelSize: String(order.outsideParcelSize || '').trim(),
+    outsideShippingMode: String(order.outsideShippingMode || '').trim(),
+    quoteStatus,
     weightKg: weightOf(order),
-    cashExpected: amount.amount,
-    haulFee: amount.haulFee,
-    carrierNet: amount.carrierNet,
+    cashExpected: awaitingQuote ? 0 : amount.amount,
+    // Commission counts only when the company takes the order.
+    haulFee: 0,
+    carrierNet: awaitingQuote ? 0 : amount.amount,
+    fareLabel: awaitingQuote ? 'Bei baada ya kampuni' : String(order.totalLabel || order.fareLabel || '').trim(),
     paymentMethod: 'cash',
+    ...(photos.length ? { parcelPhotoUrls: photos } : {}),
     cargoPhotos: Array.isArray(order.cargoPhotos) ? order.cargoPhotos : (order.photoUrls || []),
-    parcelPhotoUrl: order.parcelPhotoUrl || '',
-    distanceKm: order.distanceKm || order.routeDistanceKm || null,
-    distanceLabel: order.distanceLabel || '',
+    parcelPhotoUrl: order.parcelPhotoUrl || photos[0] || '',
+    ...(distanceMeters > 0 ? { distanceMeters } : {}),
+    ...(distanceKm > 0 ? { distanceKm } : {}),
+    ...(distanceLabel ? { distanceLabel } : {}),
+    ...(Number(order.durationSeconds) > 0 ? { durationSeconds: Math.round(Number(order.durationSeconds)) } : {}),
   };
 }
 
@@ -2197,10 +2694,11 @@ async function runMatching() {
     if (!isBusParcel(order)) continue;
     const existing = shipments.get(order.id);
     if (existing?.carrierId) continue;
-    if (existing?.shipmentStatus === 'assigned' && existing.offerExpiresAt?.toDate && existing.offerExpiresAt.toDate().getTime() > Date.now()) continue;
+    if (existing?.shipmentStatus === 'assigned' && existing.offeredCarrierId) continue;
     const declined = new Set(existing?.declinedCarrierIds || []);
     if (existing?.shipmentStatus === 'assigned' && existing.offeredCarrierId) declined.add(existing.offeredCarrierId);
     const ranked = carriers
+      .filter((carrier) => carrierIsOnline(carrier))
       .map((carrier) => scoreCarrier(order, carrier, routesOf(carrier.id), vehiclesOf(carrier.id), {
         usedByRoute: heldWeightByRoute(shipmentRows, order.id),
       }))
@@ -2235,7 +2733,7 @@ async function runMatching() {
       arrivalTime: deleteField(),
       pickupMode: deleteField(),
       trackStep: deleteField(),
-      offerExpiresAt: new Date(Date.now() + OFFER_MS),
+      offerExpiresAt: null,
       offeredAt: serverTimestamp(),
       declinedCarrierIds: [...declined],
       capacityReserved: true,
@@ -2449,34 +2947,40 @@ async function applyManifestMark(id, stage) {
   if (!mine({ id, ...current }) || current.carrierId !== state.carrier?.id) throw new Error('Not your shipment.');
   if (stage === 'loaded') {
     if (isLoaded({ ...current, id })) return;
-    await updateDoc(ref, {
+    const patch = {
       shipmentStatus: 'at_bus',
       trackStep: 'packed',
       loadedAt: serverTimestamp(),
       statusHistory: arrayUnion({ status: 'packed', label: 'Imepakiwa', at: stamp(), actor: state.user.email }),
-    });
+    };
+    await updateDoc(ref, patch);
+    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id });
     return;
   }
   if (stage === 'arrived') {
     if (!isLoaded({ ...current, id })) throw new Error('Mark loaded first.');
     if (isArrived({ ...current, id })) return;
-    await updateDoc(ref, {
+    const patch = {
       shipmentStatus: 'arrived',
       trackStep: 'arrived',
       arrivedAt: serverTimestamp(),
       statusHistory: arrayUnion({ status: 'arrived', label: 'Imefika', at: stamp(), actor: state.user.email }),
-    });
+    };
+    await updateDoc(ref, patch);
+    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id });
     return;
   }
   if (stage === 'delivered') {
     if (!isArrived({ ...current, id })) throw new Error('Mark arrived first.');
-    await updateDoc(ref, {
+    const patch = {
       shipmentStatus: 'delivered',
       trackStep: 'handed',
       deliveredAt: serverTimestamp(),
       statusHistory: arrayUnion({ status: 'handed', label: 'Imewasili', at: stamp(), actor: state.user.email }),
-    });
+    };
+    await updateDoc(ref, patch);
     await updateDoc(doc(db, 'carriers', state.carrier.id), { deliveries: increment(1) });
+    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id });
   }
 }
 
@@ -2629,6 +3133,24 @@ async function onViewClick(event) {
   const snap = await getDoc(ref);
   if (!snap.exists() || !mine({ id, ...snap.data() })) return;
   const current = snap.data();
+  if (act === 'set-status') {
+    const step = actBtn.dataset.step;
+    const status = actBtn.dataset.status;
+    const label = actBtn.dataset.label || status;
+    if (!step || !status || current.carrierId !== state.carrier?.id) return;
+    const patch = {
+      trackStep: step,
+      shipmentStatus: status,
+      statusHistory: arrayUnion({ status: step, label, at: stamp(), actor: state.user?.email || '' }),
+    };
+    if (step === 'packed') patch.pickedUpAt = serverTimestamp();
+    if (step === 'transit') patch.inTransitAt = serverTimestamp();
+    if (step === 'arrived') patch.arrivedAt = serverTimestamp();
+    if (step === 'handed') patch.deliveredAt = serverTimestamp();
+    await updateDoc(ref, patch);
+    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id }, { message: label });
+    return;
+  }
   if (act === 'verify' || act === 'accept' || act === 'start-transit' || act === 'tracking-link' || act === 'deliver') {
     const path = {
       verify: '/carrier/portal/verify',
@@ -2637,7 +3159,93 @@ async function onViewClick(event) {
       'tracking-link': '/carrier/portal/tracking-link',
       deliver: '/carrier/portal/deliver',
     }[act];
-    const payload = await portalCall(path, { shipmentId: id, locationName: act === 'deliver' ? 'Delivered' : undefined });
+    const body = { shipmentId: id, locationName: act === 'deliver' ? 'Delivered' : undefined };
+    if (act === 'accept') {
+      const form = document.querySelector(`form[data-quote="${id}"]`);
+      const amount = Math.round(Number(String(form?.amount?.value || current.cashExpected || '').replace(/[^\d]/g, '')));
+      let commission = Math.round(Number(String(form?.commission?.value || current.quoteDraftCommissionTzs || '').replace(/[^\d]/g, '')));
+      if (amount >= 1000) body.amountTzs = amount;
+      if (form?.commission && commission >= 0) body.commissionTzs = commission;
+      else if (Number(current.quoteDraftCommissionTzs) > 0) {
+        commission = Math.round(Number(current.quoteDraftCommissionTzs));
+        body.commissionTzs = commission;
+      }
+      const needsPrice = String(current.quoteStatus || '') === 'awaiting_company' || !(Number(current.cashExpected) > 0 || amount >= 1000);
+      if (needsPrice && !(amount >= 1000)) {
+        window.alert('Weka bei ya usafirishaji kabla ya kuchukua oda.');
+        form?.amount?.focus();
+        return;
+      }
+      try {
+        const payload = await portalCall(path, body);
+        const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
+        if (note) window.alert(note);
+        return;
+      } catch (error) {
+        const message = String(error?.message || '');
+        if (!/404|not found|Cannot POST|Failed to fetch|NetworkError|Failed to make request/i.test(message)) {
+          throw error;
+        }
+        // Local accept fallback: lock edited price + commission when company takes the order.
+        const fee = amount >= 1000 ? amount : Math.round(Number(current.cashExpected) || 0);
+        const rate = Number(companyStanding().feePercent || 12) / 100;
+        const haulFee = body.commissionTzs != null
+          ? Math.max(0, Math.min(fee, Math.round(Number(body.commissionTzs) || 0)))
+          : Math.round(fee * rate);
+        const label = fee > 0 ? `TZS ${fee.toLocaleString('en-US')}` : String(current.fareLabel || '').trim();
+        const orderId = String(current.orderId || id).trim();
+        const extras = {};
+        try {
+          const orderSnap = await getDoc(doc(db, 'orders', orderId));
+          if (orderSnap.exists()) {
+            const order = orderSnap.data() || {};
+            const photos = Array.isArray(order.parcelPhotoUrls)
+              ? order.parcelPhotoUrls.map((url) => String(url || '').trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 6)
+              : [];
+            if (photos.length && !cargoPhotoList(current).length) extras.parcelPhotoUrls = photos;
+            const meters = Number(order.distanceMeters);
+            if ((!current.distanceMeters || Number(current.distanceMeters) <= 0) && Number.isFinite(meters) && meters > 0) {
+              extras.distanceMeters = Math.round(meters);
+              extras.distanceKm = Math.round((meters / 1000) * 10) / 10;
+              extras.distanceLabel = String(order.distanceLabel || '').trim() || `${extras.distanceKm} km`;
+            }
+          }
+        } catch {
+          // optional enrich
+        }
+        const acceptPatch = {
+          carrierId: state.carrier.id,
+          shipmentStatus: 'accepted',
+          trackStep: 'received',
+          pickupStatus: 'assigned',
+          acceptedAt: serverTimestamp(),
+          manifestDate: darTodayKey(),
+          cashExpected: fee,
+          haulFee,
+          haulFeeRate: fee > 0 ? haulFee / fee : rate,
+          carrierNet: Math.max(0, fee - haulFee),
+          commissionCountedAt: serverTimestamp(),
+          ...(fee > 0 ? { fareLabel: label, quoteStatus: 'offered' } : {}),
+          statusHistory: arrayUnion({ status: 'received', label: 'Imepokelewa', at: stamp(), actor: state.user.email }),
+          ...extras,
+        };
+        await updateDoc(ref, acceptPatch);
+        if (orderId && fee > 0 && (needsPrice || String(current.quoteStatus || '') === 'awaiting_company')) {
+          await setDoc(doc(db, 'orders', orderId), {
+            quoteStatus: 'offered',
+            carrierQuoteTzs: fee,
+            fareLabel: label,
+            totalLabel: label,
+            carrierQuoteAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+        }
+        await updateDoc(doc(db, 'carriers', state.carrier.id), { accepted: increment(1) });
+        await mirrorCustomerOrder(id, { ...current, ...acceptPatch });
+        return;
+      }
+    }
+    const payload = await portalCall(path, body);
     const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
     if (note) window.alert(note);
     return;
@@ -2664,7 +3272,7 @@ async function onViewClick(event) {
   }
   if (act === 'accept-legacy') {
     if (current.offeredCarrierId !== state.carrier.id) return;
-    await updateDoc(ref, {
+    const acceptLegacy = {
       carrierId: state.carrier.id,
       shipmentStatus: 'accepted',
       trackStep: 'received',
@@ -2672,27 +3280,38 @@ async function onViewClick(event) {
       acceptedAt: serverTimestamp(),
       manifestDate: darTodayKey(),
       statusHistory: arrayUnion({ status: 'received', label: 'Imepokelewa', at: stamp(), actor: state.user.email }),
-    });
+    };
+    await updateDoc(ref, acceptLegacy);
     await updateDoc(doc(db, 'carriers', state.carrier.id), { accepted: increment(1) });
+    await mirrorCustomerOrder(id, { ...current, ...acceptLegacy });
     if (route().page !== 'overview') location.hash = '#/overview';
   }
   if (act === 'reject') {
-    await updateDoc(ref, {
+    const rejectPatch = {
       shipmentStatus: 'matching',
       offeredCarrierId: null,
       pickupMode: deleteField(),
       trackStep: deleteField(),
       declinedCarrierIds: arrayUnion(state.carrier.id),
       statusHistory: arrayUnion({ status: 'matching', label: 'Declined', at: stamp(), actor: state.user.email }),
-    });
+    };
+    await updateDoc(ref, rejectPatch);
     await updateDoc(doc(db, 'carriers', state.carrier.id), { rejected: increment(1) });
+    await mirrorCustomerOrder(id, {
+      ...current,
+      shipmentStatus: 'matching',
+      offeredCarrierId: null,
+      carrierId: null,
+      pickupMode: '',
+      trackStep: '',
+    });
   }
   if (act === 'pickup') {
     const mode = actBtn.dataset.mode;
     if (current.carrierId !== state.carrier.id) return;
     if (mode !== 'agent_collects' && mode !== 'haul_delivers_to_office') return;
     const label = mode === 'haul_delivers_to_office' ? 'Leteni ofisini' : 'Nitafuata';
-    await updateDoc(ref, {
+    const pickupPatch = {
       pickupMode: mode,
       shipmentStatus: 'contacted',
       trackStep: 'pickup',
@@ -2705,7 +3324,9 @@ async function onViewClick(event) {
         at: stamp(),
         actor: state.user.email,
       }),
-    });
+    };
+    await updateDoc(ref, pickupPatch);
+    await mirrorCustomerOrder(id, { ...current, ...pickupPatch, carrierId: state.carrier.id });
   }
   if (act === 'track') {
     const step = TRACK.find((item) => item.key === actBtn.dataset.step);
@@ -2722,6 +3343,7 @@ async function onViewClick(event) {
     await updateDoc(ref, patch);
     if (step.key === 'packed') await updateDoc(doc(db, 'carriers', state.carrier.id), { pickups: increment(1) });
     if (step.key === 'handed') await updateDoc(doc(db, 'carriers', state.carrier.id), { deliveries: increment(1) });
+    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id });
   }
   if (act === 'advance') {
     const next = NEXT_STATUS[current.shipmentStatus];
@@ -2730,11 +3352,21 @@ async function onViewClick(event) {
       shipmentStatus: next,
       statusHistory: arrayUnion({ status: next, at: stamp(), actor: state.user.email }),
     };
-    if (next === 'picked_up') patch.pickedUpAt = serverTimestamp();
-    if (next === 'delivered') patch.deliveredAt = serverTimestamp();
+    if (next === 'picked_up') {
+      patch.pickedUpAt = serverTimestamp();
+      patch.trackStep = 'packed';
+    }
+    if (next === 'in_transit') patch.trackStep = 'transit';
+    if (next === 'arrived') patch.trackStep = 'arrived';
+    if (next === 'delivered') {
+      patch.deliveredAt = serverTimestamp();
+      patch.trackStep = 'handed';
+    }
+    if (next === 'contacted' || next === 'pickup_scheduled') patch.trackStep = 'pickup';
     await updateDoc(ref, patch);
     if (next === 'picked_up') await updateDoc(doc(db, 'carriers', state.carrier.id), { pickups: increment(1) });
     if (next === 'delivered') await updateDoc(doc(db, 'carriers', state.carrier.id), { deliveries: increment(1) });
+    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id });
   }
   if (act === 'cash') {
     await updateDoc(ref, {
@@ -2852,7 +3484,7 @@ async function onViewSubmit(event) {
     if (!coverageAllTanzania && !coverageRegions.length && form.querySelector('#profileCoverageAll')) {
       throw new Error('Select All Tanzania or at least one operating region.');
     }
-    const phone = String(data.get('phone') || '').trim();
+    const phone = smsPhone(data.get('phone')) || String(data.get('phone') || '').trim();
     if (phone) {
       const phoneClash = await getDocs(query(collection(db, 'carriers'), where('phone', '==', phone), limit(1)));
       if (!phoneClash.empty && phoneClash.docs[0].id !== id) {
@@ -2868,7 +3500,9 @@ async function onViewSubmit(event) {
       location: data.get('location'),
       physicalAddress: data.get('location') || '',
       businessDetails: data.get('businessDetails'),
-      notifySms: Boolean(data.get('notifySms')),
+      notifySms: form.querySelector('[name="notifySms"]')
+        ? Boolean(form.querySelector('[name="notifySms"]').checked)
+        : state.carrier?.notifySms !== false,
       notifyPortal: true,
     };
     if (form.querySelector('#profileCoverageAll')) {
@@ -2920,7 +3554,7 @@ async function onViewSubmit(event) {
       offeredCarrierId: carrierId,
       offerScore: 100,
       routeLabel: 'Manual assignment',
-      offerExpiresAt: new Date(Date.now() + OFFER_MS),
+      offerExpiresAt: null,
       statusHistory: arrayUnion({ status: 'assigned', at: stamp(), actor: 'haul-manual' }),
       updatedAt: serverTimestamp(),
     }, { merge: true });
@@ -2965,8 +3599,8 @@ async function createCarrierFromRegistration(user, data, email) {
     companyName,
     name: companyName,
     contactPerson: data.get('contactPerson') || '',
-    phone,
-    phoneNormalized: phone,
+    phone: smsPhone(phone) || phone,
+    phoneNormalized: smsPhone(phone) || phone,
     businessEmail: email,
     email,
     region,
@@ -3146,6 +3780,10 @@ function bindAuth() {
     }
   };
   $('signOutBtn').onclick = () => {
+    stopPortalPresence();
+    if (state.carrier?.id) {
+      updateDoc(doc(db, 'carriers', state.carrier.id), { portalOnlineAt: deleteField() }).catch(() => null);
+    }
     state.needsCompanySetup = false;
     clearAuthIntent();
     signOut(auth);
@@ -3167,7 +3805,42 @@ function bindAuth() {
     navigateApp(go.dataset.go);
     closeNav();
   });
+  $('view').addEventListener('input', (event) => {
+    const form = event.target.closest('form[data-quote]');
+    if (!form || event.target.name !== 'amount') return;
+    const amount = Math.round(Number(String(form.amount?.value || '').replace(/[^\d]/g, '')));
+    const rate = Number(companyStanding().feePercent || 12) / 100;
+    if (form.commission && document.activeElement !== form.commission) {
+      form.commission.value = amount > 0 ? String(Math.round(amount * rate)) : '';
+    }
+  });
+  $('view').addEventListener('submit', (event) => {
+    const form = event.target.closest('form[data-quote]');
+    if (!form) return;
+    event.preventDefault();
+    const shipmentId = form.dataset.quote;
+    const amount = Math.round(Number(String(form.amount?.value || '').replace(/[^\d]/g, '')));
+    const commission = Math.round(Number(String(form.commission?.value || '').replace(/[^\d]/g, '')));
+    if (!shipmentId || amount < 1000) {
+      window.alert('Weka bei halali kwa TZS.');
+      return;
+    }
+    sendCompanyQuote(shipmentId, amount, commission)
+      .then(() => {
+        state.editingQuoteId = null;
+        window.alert('Bei imetumwa kwa mteja.');
+      })
+      .catch((error) => {
+        window.alert(error.message || 'Bei haikuweza kutumwa.');
+      });
+  });
   $('view').addEventListener('click', (event) => {
+    const editQuote = event.target.closest('[data-edit-quote]');
+    if (editQuote) {
+      state.editingQuoteId = editQuote.getAttribute('data-edit-quote');
+      render();
+      return;
+    }
     if (event.target.id === 'runMatch') {
       runMatching().then((count) => {
         $('matchResult').textContent = `${count} oda ${count === 1 ? 'imetumwa' : 'zimetumwa'}.`;
