@@ -1594,11 +1594,11 @@ function ordersTable(rows, showAccept) {
 }
 
 const ORDER_TABS = [
-  ['new', 'New Orders'],
-  ['verified', 'Verified'],
-  ['transit', 'In Transit'],
-  ['delivered', 'Delivered'],
-  ['cancelled', 'Cancelled'],
+  ['new', 'Mpya'],
+  ['verified', 'Imepokelewa'],
+  ['transit', 'Njiani'],
+  ['delivered', 'Imekabidhiwa'],
+  ['cancelled', 'Imefutwa'],
 ];
 
 function orderBucket(item) {
@@ -1695,29 +1695,51 @@ function orderActions(item) {
   return `<a class="btn line small" href="#/assignment/${id}">Open</a>`;
 }
 
+function orderPipeline(item) {
+  const steps = [
+    ['new', 'Mpya'],
+    ['verified', 'Imepokelewa'],
+    ['transit', 'Njiani'],
+    ['delivered', 'Imekabidhiwa'],
+  ];
+  const bucket = orderBucket(item);
+  if (bucket === 'cancelled') return '';
+  const index = Math.max(0, steps.findIndex(([key]) => key === bucket));
+  return `<ol class="pipe">${steps.map(([key, label], step) => `<li class="${step < index ? 'done' : step === index ? 'now' : ''}">${label}</li>`).join('')}</ol>`;
+}
+
 function ordersDesk(tab) {
   const current = ORDER_TABS.some(([key]) => key === tab) ? tab : 'new';
   const rows = state.shipments.filter((item) => orderBucket(item) === current);
   const tabs = ORDER_TABS.map(([key, label]) => {
     const count = state.shipments.filter((item) => orderBucket(item) === key).length;
-    return `<a class="order-tab ${key === current ? 'on' : ''}" href="#/orders/${key}">${label} <em>${count}</em></a>`;
+    return `<a class="order-tab ${key === current ? 'on' : ''}" href="#/orders/${key}"><span>${label}</span><em>${count}</em></a>`;
   }).join('');
   const body = rows.length
     ? `<div class="order-list">${rows.map((item) => {
         const latest = item.latestJourney || {};
-        return `<article class="panel order-card">
-          <header><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>${badge(item.journeyStatus || item.shipmentStatus)}</header>
-          <p>${esc(item.customerName || 'Customer')} · ${esc(item.customerPhone || 'No phone')}</p>
-          <p>${esc(item.pickupLabel || item.origin || 'Pickup')} → ${esc(item.destination || 'Destination')}</p>
-          <p class="muted">${esc(item.parcelDescription || 'Cargo')} · ${esc(item.outsideParcelSize || '')} · value ${money(item.declaredValueTzs || 0)} · fee ${priceOf(item) > 0 ? money(priceOf(item)) : 'Bei haijawekwa'}</p>
-          ${renderCargoPhotos(item)}
-          ${quotePanel(item, { force: current === 'new' || current === 'verified' || isOutsideCompanyJob(item) })}
-          <p class="muted">Latest: ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(latest.at)}` : ''}${latest.locationSource === 'manual' ? ' · manual location' : ''}</p>
-          <div class="actions">${orderActions(item)} <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a></div>
+        const fee = priceOf(item) > 0 ? money(priceOf(item)) : 'Bei haijawekwa';
+        return `<article class="order-card">
+          <div class="order-media">${renderCargoPhotos(item)}</div>
+          <div class="order-body">
+            <header>
+              <div>
+                <strong class="order-ref">${esc(item.orderNumber || item.id.slice(0, 8))}</strong>
+                <p class="order-route">${esc(item.pickupLabel || item.origin || 'Pickup')} → ${esc(item.destination || 'Destination')}</p>
+              </div>
+              ${badge(item.journeyStatus || item.shipmentStatus)}
+            </header>
+            ${orderPipeline(item)}
+            <p class="order-meta">${esc(item.customerName || 'Customer')} · ${esc(item.customerPhone || '—')} · ${esc(item.parcelDescription || 'Cargo')}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''} · ${esc(fee)}</p>
+            ${quotePanel(item, { force: current === 'new' || current === 'verified' || isOutsideCompanyJob(item) })}
+            ${statusUploadPanel(item)}
+            <p class="order-latest">Latest · ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(latest.at)}` : ''}</p>
+            <div class="actions">${orderActions(item)} <a class="btn line small" href="#/assignment/${esc(item.id)}">Details</a></div>
+          </div>
         </article>`;
       }).join('')}</div>`
-    : '<p class="empty">No orders in this tab.</p>';
-  return `<div class="order-tabs">${tabs}</div>${body}`;
+    : '<p class="empty">Hakuna oda katika hatua hii.</p>';
+  return `<div class="order-desk"><div class="order-tabs" role="tablist">${tabs}</div>${body}</div>`;
 }
 
 async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
