@@ -2458,4 +2458,76 @@ body:has(#app:not(.hidden)) {
   #app .topbar { margin: 0 -14px 14px; padding: 0 14px; }
   #app .who { border-radius: 10px; height: auto; padding: 6px; }
 }
+
+/* Mute-style orders desk */
+#app .btn.dark {
+  background: #111113;
+  color: #fff;
+  border-color: #111113;
+}
+#app .btn.dark:hover { filter: brightness(1.08); }
+#app .mute-desk .orders-table-card {
+  background: #fff;
+  border: 1px solid #e8eaef;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+#app .mute-desk .orders-table-card.table-wrap,
+#app .mute-desk .orders-table-card .table-wrap {
+  border: 0;
+  border-radius: 0;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+}
+#app .mute-desk .ops-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  color: #8b93a7;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  border-bottom: 1px solid #eef0f4;
+}
+#app .mute-desk .ops-table td {
+  border-bottom: 1px solid #f1f2f5;
+  vertical-align: middle;
+}
+#app .mute-desk .ops-table tbody tr:hover { background: #fafbfc; }
+#app .mute-desk .ops-table tbody tr.is-open { background: #fffceb; }
+#app .mute-desk .order-id {
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+#app .money-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+#app .money-pair > div {
+  background: #fafbfc;
+  border: 1px solid #e8eaef;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+#app .money-pair span {
+  display: block;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+#app .money-pair strong {
+  font-size: 14px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+#app .map-actions { flex-wrap: wrap; gap: 8px; }
+@media (max-width: 700px) {
+  #app .money-pair { grid-template-columns: 1fr; }
 }

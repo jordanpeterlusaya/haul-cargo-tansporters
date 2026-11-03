@@ -24,6 +24,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -388,10 +389,30 @@ async function ensureCargoPhotos(item) {
   return item;
 }
 
+function pickupMapUrl(item) {
+  const lat = Number(item?.pickupLatitude);
+  const lng = Number(item?.pickupLongitude);
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    return `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
+  }
+  const query = item?.pickupLabel || item?.origin || item?.destination || 'Dar es Salaam';
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+function moneyPairCell(item) {
+  const cargoValue = declaredValueOf(item);
+  const shippingFee = priceOf(item);
+  return `<div class="money-pair">
+    <div><span>Thamani ya mzigo</span><strong>${cargoValue ? esc(money(cargoValue)) : '—'}</strong></div>
+    <div><span>Bei ya usafirishaji</span><strong>${shippingFee > 0 ? esc(money(shippingFee)) : 'Bado haijawekwa'}</strong></div>
+  </div>`;
+}
+
 function orderFacts(item) {
   void ensureCargoPhotos(item);
   const route = matchedRoute(item);
   const value = declaredValueOf(item);
+  const shippingFee = priceOf(item);
   const schedule = item.routeLabel || (route ? `${route.origin} → ${route.destination}` : '');
   const authorized = item.carrierId === state.carrier?.id || (item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id);
   return `${renderCargoPhotos(item)}<dl class="facts">
@@ -402,10 +423,13 @@ function orderFacts(item) {
     <div><dt>Mpokeaji</dt><dd>${authorized ? esc(item.recipientName || '—') : 'Baada ya kuchukua oda'}</dd></div>
     <div><dt>Simu mtumaji</dt><dd>${authorized ? phoneLine(item.customerPhone) : '—'}</dd></div>
     <div><dt>Simu mpokeaji</dt><dd>${authorized ? phoneLine(item.recipientPhone) : '—'}</dd></div>
-    <div><dt>Thamani</dt><dd>${value ? esc(money(value)) : '—'}</dd></div>
+    <div><dt>Thamani ya mzigo</dt><dd>${value ? esc(money(value)) : 'Haijatajwa'}</dd></div>
+    <div><dt>Bei ya usafirishaji</dt><dd>${shippingFee > 0 ? money(shippingFee) : 'Bado haijawekwa'}</dd></div>
     <div><dt>Safari</dt><dd>${esc(schedule || '—')}</dd></div>
-    <div><dt>Bei</dt><dd>${priceOf(item) > 0 ? money(priceOf(item)) : 'Bei baada ya kampuni'}</dd></div>
-  </dl>`;
+  </dl>
+  <div class="actions map-actions">
+    <a class="btn dark small" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Open Google Maps</a>
+  </div>`;
 }
 function cashOf(order) {
   const source = `${order.totalLabel || ''} ${order.fareLabel || ''} ${order.cashExpected || ''}`.replace(/,/g, '');
@@ -414,8 +438,9 @@ function cashOf(order) {
   return Math.round(Number(order.customerOffer || 0));
 }
 function priceOf(item) {
-  const n = Number(item?.cashExpected);
-  if (Number.isFinite(n) && n > 0) return Math.round(n);
+  // Shipping fee only — never treat customer-declared cargo value as the fare.
+  const quoted = Number(item?.carrierQuoteTzs ?? item?.shippingFeeTzs ?? item?.cashExpected);
+  if (Number.isFinite(quoted) && quoted > 0) return Math.round(quoted);
   return cashOf(item);
 }
 function ownedRows() {
@@ -1489,8 +1514,8 @@ async function enableOfferNotifications() {
   }
 }
 
-function statusUploadPanel() {
-  return '';
+function statusUploadPanel(item) {
+  return stageAction(item);
 }
 
 function offerHeroCard(item) {
@@ -1757,21 +1782,24 @@ function dashboard() {
 
 function ordersTable(rows, showAccept) {
   if (!rows.length) return '<p class="empty">No orders in this list.</p>';
-  return `<div class="table-wrap"><table class="ops-table">
+  return `<div class="table-wrap orders-table-card"><table class="ops-table">
     <thead><tr>
       <th></th><th>Order</th><th>Customer</th><th>Route</th><th>Cargo</th>
-      <th>Value</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
+      <th>Thamani ya mzigo</th><th>Bei ya usafirishaji</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
     </tr></thead>
     <tbody>${rows.map((item) => {
       const fee = commissionParts(item);
+      const cargoValue = declaredValueOf(item);
+      const shippingFee = priceOf(item);
       const actions = `${stageButton(item)}<a class="btn line small" href="#/assignment/${esc(item.id)}">Open</a>`;
       return `<tr>
         <td>${photoThumb(item)}</td>
-        <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
+        <td><strong class="order-id">${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
         <td>${esc(item.customerName || '—')}<div class="cell-sub">${esc(item.customerPhone || '')}</div></td>
         <td>${esc(item.pickupLabel || item.origin || '—')}<div class="cell-sub">${esc(item.destination || item.dropoffLabel || '—')}</div></td>
         <td>${esc(item.parcelDescription || item.cargoDescription || 'Cargo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}</td>
-        <td>${priceOf(item) > 0 ? money(priceOf(item)) : '—'}</td>
+        <td>${cargoValue ? money(cargoValue) : '—'}</td>
+        <td>${shippingFee > 0 ? money(shippingFee) : '—'}</td>
         <td>${fee.recorded ? money(fee.fee) : '—'}</td>
         <td>${esc(when(item.offeredAt || item.createdAt || item.acceptedAt))}</td>
         <td>${stageBadge(item)}</td>
@@ -1862,20 +1890,25 @@ function quotePanel(item, opts = {}) {
   if (['cancelled', 'delivered'].includes(String(item.shipmentStatus || ''))) return '';
   const force = Boolean(opts.force) || needsCustomerPrice(item);
   const editing = Boolean(opts.editing) || state.editingQuoteId === item.id;
+  const cargoValue = declaredValueOf(item);
+  const cargoNote = `<p class="muted quote-hint">Thamani ya mzigo (${cargoValue ? money(cargoValue) : '—'}) ni ya mteja — haisiingizwi kama bei ya usafirishaji.</p>`;
+
   if (qs === 'confirmed' && priceOf(item) > 0 && !editing) {
     const fee = Math.round(Number(item.haulFee) || 0);
     return `<div class="price-quote-panel is-confirmed">
-      <p class="quote-editor-title">Bei ya mzigo</p>
+      <p class="quote-editor-title">Bei ya usafirishaji</p>
       <p><strong>${money(priceOf(item))}</strong> · mteja amekubali.${fee > 0 ? ` Commission ${money(fee)}.` : ''}</p>
+      ${cargoNote}
     </div>`;
   }
 
   if (qs === 'offered' && priceOf(item) > 0 && !editing) {
     const draft = Math.round(Number(item.quoteDraftCommissionTzs) || Number(item.haulFee) || 0);
     return `<div class="price-quote-panel is-sent">
-      <p class="quote-editor-title">Bei imetumwa kwa mtumaji</p>
+      <p class="quote-editor-title">Bei ya usafirishaji imetumwa</p>
       <p><strong>${money(priceOf(item))}</strong></p>
       <p class="muted quote-hint">${draft > 0 ? `Commission draft ${money(draft)}.` : ''} Inasubiri mteja kukubali au kukataa.</p>
+      ${cargoNote}
       <button class="btn line small" type="button" data-edit-quote="${esc(item.id)}">Badilisha bei</button>
     </div>`;
   }
@@ -1886,8 +1919,9 @@ function quotePanel(item, opts = {}) {
   const seed = priceOf(item) > 0 ? priceOf(item) : '';
   const seedFee = seed ? Math.round(seed * (rate / 100)) : '';
   return `<form class="quote-form quote-form-stack price-quote-panel" data-quote="${esc(item.id)}">
-    <p class="quote-editor-title">Weka bei ya kutuma mzigo</p>
-    <p class="muted quote-hint">Andika bei ya usafirishaji. Mtumaji ataiona kwenye app na ataweza kukubali au kukataa.</p>
+    <p class="quote-editor-title">Weka bei ya usafirishaji</p>
+    <p class="muted quote-hint">Andika bei ya usafirishaji tu. Mtumaji ataiona kwenye app na ataweza kukubali au kukataa.</p>
+    ${cargoNote}
     <label>Bei ya usafirishaji (TZS)
       <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="mfano 25000" required autofocus />
     </label>
@@ -2007,38 +2041,46 @@ function ordersDesk(tab) {
     return `<a class="order-tab ${key === current ? 'on' : ''}" href="#/orders/${key}"><span>${label}</span><em>${count}</em></a>`;
   }).join('');
   const body = slice.length
-    ? `<div class="table-wrap"><table class="ops-table">
+    ? `<div class="table-wrap orders-table-card"><table class="ops-table">
         <thead><tr>
           <th></th><th>Order</th><th>Customer</th><th>Route</th><th>Cargo</th>
-          <th>Value</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
+          <th>Thamani ya mzigo</th><th>Bei ya usafirishaji</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
         </tr></thead>
         <tbody>${slice.map((item) => {
           const fee = commissionParts(item);
           const open = state.deskOpen === item.id;
           const latest = item.latestJourney || {};
+          const cargoValue = declaredValueOf(item);
+          const shippingFee = priceOf(item);
           return `<tr class="${open ? 'is-open' : ''}">
             <td>${photoThumb(item)}</td>
-            <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
+            <td><strong class="order-id">${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
             <td>${esc(item.customerName || '—')}<div class="cell-sub">${esc(item.customerPhone || '')}</div></td>
             <td>${esc(item.pickupLabel || item.origin || '—')}<div class="cell-sub">${esc(dropOffLabel(item))}</div></td>
             <td>${esc(item.parcelDescription || 'Cargo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</td>
-            <td>${priceOf(item) > 0 ? money(priceOf(item)) : '—'}</td>
+            <td>${cargoValue ? money(cargoValue) : '—'}</td>
+            <td>${shippingFee > 0 ? money(shippingFee) : '—'}</td>
             <td>${fee.recorded ? money(fee.fee) : '—'}${fee.outstanding ? `<div class="cell-sub">due ${money(fee.outstanding)}</div>` : ''}</td>
             <td>${esc(when(item.offeredAt || item.createdAt || item.acceptedAt))}</td>
             <td>${stageBadge(item)}</td>
             <td class="actions">${stageButton(item)}<button class="btn line small" type="button" data-desk="open" data-id="${esc(item.id)}">${open ? 'Hide' : 'Details'}</button></td>
           </tr>
-          ${open ? `<tr class="desk-detail"><td colspan="10">
+          ${open ? `<tr class="desk-detail"><td colspan="11">
             <div class="desk-detail-grid">
               <div class="order-media">${renderCargoPhotos(item)}</div>
               <div>
                 ${orderPipeline(item)}
                 ${lifecycleList(item)}
+                ${moneyPairCell(item)}
                 <p class="order-latest">Company · ${esc(item.carrierCompanyName || state.carrier?.companyName || '—')}</p>
                 <p class="order-latest">Latest · ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(when(latest.at))}` : ''}</p>
                 ${quotePanel(item, { force: current === 'new' || current === 'verified' || isOutsideCompanyJob(item) })}
                 ${statusUploadPanel(item)}
-                <div class="actions">${orderActions(item)} <a class="btn line small" href="#/assignment/${esc(item.id)}">Full record</a></div>
+                <div class="actions map-actions">
+                  <a class="btn dark small" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Open Google Maps</a>
+                  ${orderActions(item)}
+                  <a class="btn line small" href="#/assignment/${esc(item.id)}">Full record</a>
+                </div>
               </div>
             </div>
           </td></tr>` : ''}`;
@@ -2051,7 +2093,7 @@ function ordersDesk(tab) {
           </div>
         </div>`
     : `<p class="empty">${query || fromMs || toMs ? 'Hakuna oda inayolingana na utafutaji.' : 'Hakuna oda katika hatua hii.'}</p>`;
-  return `<div class="order-desk">
+  return `<div class="order-desk mute-desk">
     <div class="desk-tools">
       <input id="deskSearch" type="search" placeholder="Search order, customer, phone, route" value="${esc(state.deskQuery || '')}" />
       <label>From <input id="deskFrom" type="date" value="${esc(state.deskFrom || '')}" /></label>
@@ -2104,8 +2146,11 @@ async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
   await setDoc(doc(db, 'orders', orderId), {
     quoteStatus: 'offered',
     carrierQuoteTzs: amount,
+    shippingFeeTzs: amount,
+    deliveryFee: amount,
     fareLabel: label,
     totalLabel: label,
+    // Never copy declared cargo value into shipping fields.
     updatedAt: serverTimestamp(),
   }, { merge: true });
   const sent = state.shipments.find((item) => item.id === shipmentId);
@@ -2183,10 +2228,45 @@ async function mirrorCustomerOrder(shipmentId, shipment, extras = {}) {
     patch.deliveredAt = serverTimestamp();
   }
   try {
-    await setDoc(doc(db, 'orders', orderId), patch, { merge: true });
+    await runTransaction(db, async (tx) => {
+      const orderSnap = await tx.get(doc(db, 'orders', orderId));
+      const order = orderSnap.exists() ? orderSnap.data() || {} : {};
+      const stage = forwardCustomerStage(order, shipment);
+      patch.haulStage = stage.haulStage;
+      patch.statusVersion = stage.statusVersion;
+      patch.stageUpdatedAt = serverTimestamp();
+      if (stage.trackStep) patch.carrierTrackStep = stage.trackStep;
+      else delete patch.carrierTrackStep;
+      if (stage.haulStage !== 'new') {
+        delete patch.carrierName;
+        delete patch.carrierAgentName;
+        delete patch.carrierPhone;
+        delete patch.carrierBusName;
+      }
+      tx.set(doc(db, 'orders', orderId), patch, { merge: true });
+    });
   } catch (error) {
     console.warn('customer status mirror failed', orderId, error?.message || error);
   }
+}
+
+function forwardCustomerStage(order, shipment) {
+  const rank = { new: 0, verified: 1, in_transit: 2, delivered: 3 };
+  const fromFacts = (input) => {
+    const status = String(input?.shipmentStatus || input?.status || '').toLowerCase();
+    const step = String(input?.trackStep || input?.carrierTrackStep || '').toLowerCase();
+    const named = String(input?.haulStage || '').toLowerCase();
+    if (step === 'handed' || status === 'delivered' || named === 'delivered') return 'delivered';
+    if (step === 'transit' || step === 'arrived' || status === 'in_transit' || status === 'arrived' || named === 'in_transit') return 'in_transit';
+    if (named === 'verified' || input?.carrierId || ['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus'].includes(status) || ['received', 'pickup', 'packed'].includes(step) || String(input?.carrierMatchStatus || '') === 'accepted') return 'verified';
+    return 'new';
+  };
+  const currentName = fromFacts(order);
+  const incomingName = fromFacts(shipment);
+  const haulStage = (rank[incomingName] ?? 0) >= (rank[currentName] ?? 0) ? incomingName : currentName;
+  const version = Math.max(0, Math.round(Number(order?.statusVersion) || 0));
+  const trackStep = haulStage === 'delivered' ? 'handed' : haulStage === 'in_transit' ? (String(shipment?.trackStep || '') === 'arrived' ? 'arrived' : 'transit') : haulStage === 'verified' ? 'received' : '';
+  return { haulStage, statusVersion: haulStage !== currentName || version === 0 ? version + 1 : version, trackStep };
 }
 
 function availableOrdersPage() {
@@ -2460,23 +2540,23 @@ function assignmentPage(id) {
   const item = state.shipments.find((shipment) => shipment.id === id);
   if (!item || !mine(item)) return '<p class="empty">This order is not available on your account.</p>';
   const owned = item.carrierId === state.carrier?.id;
-  const map = item.pickupLatitude && item.pickupLongitude
-    ? `https://www.google.com/maps/search/?api=1&query=${item.pickupLatitude},${item.pickupLongitude}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.pickupLabel || item.destination || 'Dar es Salaam')}`;
+  const pickupMap = pickupMapUrl(item);
   const destMap = item.dropoffLatitude && item.dropoffLongitude
     ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(`${item.pickupLatitude || ''},${item.pickupLongitude || ''}`)}&destination=${item.dropoffLatitude},${item.dropoffLongitude}`
-    : map;
+    : pickupMap;
   void ensureCargoPhotos(item);
   return `<section class="panel">
     <p class="offer-route">${esc(item.orderNumber || item.id.slice(0, 8))} · ${esc(item.destination || item.routeLabel || 'Cargo')}</p>
     <p class="muted">${stageBadge(item)}</p>
+    ${moneyPairCell(item)}
     ${quotePanel(item, { force: true })}
     ${statusUploadPanel(item)}
     ${renderCargoPhotos(item)}
     ${orderFacts(item)}
-    <div class="actions" style="margin-top:14px">
+    <div class="actions map-actions" style="margin-top:14px">
       ${owned ? `<a class="btn line" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
-      <a class="btn line" href="${destMap}" target="_blank" rel="noopener">Directions</a>
+      <a class="btn dark" href="${esc(pickupMap)}" target="_blank" rel="noopener">Open Google Maps</a>
+      <a class="btn line" href="${esc(destMap)}" target="_blank" rel="noopener">Directions</a>
     </div>
   </section>`;
 }
@@ -2515,8 +2595,8 @@ function stickerPage(id) {
       </div>
       <div class="sticker-meta sticker-meta-4">
         <div><span>Uzito</span><strong>${esc(item.weightKg || 0)} kg</strong></div>
-        <div><span>Bei</span><strong>${esc(money(priceOf(item)))}</strong></div>
-        <div><span>Thamani</span><strong>${value ? esc(money(value)) : '—'}</strong></div>
+        <div><span>Bei ya usafirishaji</span><strong>${esc(money(priceOf(item)))}</strong></div>
+        <div><span>Thamani ya mzigo</span><strong>${value ? esc(money(value)) : '—'}</strong></div>
         <div><span>Tarehe</span><strong>${esc(tagDate)}</strong></div>
       </div>
       <p class="sticker-route secondary">${esc(routeLine)}</p>
@@ -3583,6 +3663,7 @@ async function onViewClick(event) {
       }
       try {
         const payload = await portalCall(path, body);
+        await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
         const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
         if (note) window.alert(note);
         return;
@@ -3651,6 +3732,14 @@ async function onViewClick(event) {
       }
     }
     const payload = await portalCall(path, body);
+    const stageByAct = {
+      accept: { shipmentStatus: 'accepted', trackStep: 'received' },
+      'start-transit': { shipmentStatus: 'in_transit', trackStep: 'transit' },
+      deliver: { shipmentStatus: 'delivered', trackStep: 'handed' },
+    };
+    if (stageByAct[act]) {
+      await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, ...stageByAct[act] });
+    }
     const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
     if (note) window.alert(note);
     return;
