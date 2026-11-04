@@ -88,11 +88,30 @@ img { max-width: 100%; display: block; }
   justify-content: center;
   gap: 8px;
   line-height: 1.2;
-  transition: background 160ms var(--ease), color 160ms var(--ease), opacity 160ms var(--ease);
+  transition: background 160ms var(--ease), color 160ms var(--ease), opacity 160ms var(--ease), transform 120ms var(--ease), filter 120ms var(--ease), box-shadow 120ms var(--ease);
 }
 .btn.primary { background: var(--haul); color: #fff; }
 .btn.primary:hover { filter: brightness(1.06); }
 .btn.primary:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn:active:not(:disabled),
+.btn.is-pressed:not(:disabled) {
+  transform: scale(0.97);
+  filter: brightness(0.92);
+}
+.btn.is-busy {
+  pointer-events: none;
+  opacity: 0.88;
+  cursor: progress;
+}
+.btn-inline-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: debtSpin 0.7s linear infinite;
+}
 .btn.ghost { color: var(--muted); }
 .btn.ghost:hover { color: var(--ink); background: rgba(0,0,0,0.04); }
 .btn.line { border: 1px solid var(--line); background: var(--surface); }
@@ -3748,10 +3767,22 @@ body:has(#app:not(.hidden)) {
   box-shadow: 0 10px 24px rgba(245, 224, 0, 0.35);
 }
 #app .debt-pay-btn:hover { filter: brightness(0.98); }
+#app .debt-pay-btn:active:not(:disabled),
+#app .debt-pay-btn.is-pressed {
+  transform: scale(0.97);
+  filter: brightness(0.9);
+  box-shadow: 0 4px 12px rgba(245, 224, 0, 0.28);
+}
+#app .debt-pay-btn.is-busy {
+  opacity: 0.88;
+  cursor: progress;
+  pointer-events: none;
+}
 #app .debt-pay-btn:disabled {
   opacity: 0.45;
   box-shadow: none;
   cursor: not-allowed;
+  transform: none;
 }
 #app .debt-zero { margin: 14px 0 0; }
 #app .debt-panel {
@@ -4002,21 +4033,7 @@ body:has(#app:not(.hidden)) {
 #app .debt-result { text-align: center; }
 #app .debt-wait .debt-summary,
 #app .debt-result .debt-summary { text-align: left; }
-#app .debt-wait-orb {
-  width: 72px;
-  height: 72px;
-  margin: 4px auto 18px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: radial-gradient(circle at 35% 30%, #fffdf0, #f5e000 55%, #e6d200);
-  box-shadow: 0 10px 28px rgba(17, 17, 17, 0.12);
-}
-#app .debt-wait-orb .debt-spinner {
-  margin: 0;
-  border-color: rgba(17, 17, 17, 0.14);
-  border-top-color: #111;
-}
+/* Original Stripe-payments wait animation (3b5fa25): centered ring spinner. */
 #app .debt-spinner {
   width: 42px;
   height: 42px;
@@ -4029,17 +4046,13 @@ body:has(#app:not(.hidden)) {
 @keyframes debtSpin {
   to { transform: rotate(360deg); }
 }
-#app .debt-wait-kicker { color: #7a5c00; }
-#app .debt-wait-status {
-  margin: 0 0 10px;
-  font: 650 1.02rem/1.4 var(--font-body);
-  color: #111;
+#app .debt-wait h3 {
+  margin: 0 0 8px;
 }
-#app .debt-wait-copy {
-  margin: 0 auto 8px;
-  max-width: 34ch;
-  font-size: 13px;
-  line-height: 1.45;
+#app .debt-wait-status {
+  margin: 0 0 8px;
+  font: 600 1rem/1.45 var(--font-body);
+  color: #111;
 }
 #app .debt-result-mark {
   width: 64px;

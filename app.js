@@ -139,6 +139,7 @@ const state = {
   financeSnapshotAt: 0,
   payFlow: null,
   payBusy: false,
+  payOpening: false,
 };
 
 let countdownTimer = null;
@@ -3732,10 +3733,15 @@ function payWaitHint(flow) {
   return 'Subiri uthibitisho kwenye simu.';
 }
 
+function btnBusyLabel(label) {
+  return `<span class="btn-inline-spinner" aria-hidden="true"></span><span>${label}</span>`;
+}
+
 function openPayFlow(seed = {}) {
   const snap = debtSnapshot();
   const outstanding = Math.max(0, Math.round(Number(seed.amount ?? snap.outstanding) || 0));
   const rawPhone = String(seed.phone || state.carrier?.commissionPayerPhone || state.carrier?.phone || '');
+  state.payOpening = false;
   state.payFlow = {
     step: seed.step || 'amount',
     mode: seed.mode || 'full',
@@ -3756,6 +3762,7 @@ function openPayFlow(seed = {}) {
 function closePayFlow() {
   state.payFlow = null;
   state.payBusy = false;
+  state.payOpening = false;
   render();
 }
 
@@ -3828,26 +3835,23 @@ function payFlowSheet(snap) {
       <p class="muted debt-note">Debt drops only after TrivaPesa confirms success. Duplicate pushes are blocked while a payment is in flight.</p>
       <div class="debt-sheet-actions">
         <button class="btn line" type="button" data-pay="back-method" ${busy ? 'disabled' : ''}>Back</button>
-        <button class="btn primary" type="button" data-pay="confirm" ${busy || amount < 100 ? 'disabled' : ''}>${busy ? 'Sending…' : 'Confirm &amp; Pay'}</button>
+        <button class="btn primary${busy ? ' is-busy is-pressed' : ''}" type="button" data-pay="confirm" ${busy || amount < 100 ? 'disabled' : ''} aria-busy="${busy ? 'true' : 'false'}">${busy ? btnBusyLabel('Inatuma USSD…') : 'Confirm &amp; Pay'}</button>
       </div>
     </div>`;
   } else if (flow.step === 'confirm') {
-    body = `<div class="debt-step debt-wait" aria-live="polite">
-      <div class="debt-wait-orb" aria-hidden="true">
-        <div class="debt-spinner"></div>
-      </div>
-      <p class="debt-result-kicker debt-wait-kicker">Inasubiri uthibitisho</p>
-      <h3>Subiri uthibitisho</h3>
-      <p class="debt-wait-status">${esc(flow.message || payWaitHint(flow))}</p>
-      <p class="muted debt-wait-copy">Thibitisha USSD (${esc(payNetworkLabel(flow.network))}) kwenye simu <strong>${esc(flow.phone || '—')}</strong>. Tutakujulisha mara tu malipo yakamilika au yakishindikana.</p>
-      <dl class="debt-summary">
-        <div><dt>Kiasi</dt><dd>${esc(moneyTsh(amount))}</dd></div>
-        <div><dt>Kumbukumbu</dt><dd>${esc(flow.orderId || '—')}</dd></div>
-        <div><dt>Hali</dt><dd><span class="debt-chip wait">Pending</span></dd></div>
-      </dl>
+    const pushing = busy && !flow.orderId;
+    const waitTitle = pushing ? 'Inatuma USSD…' : 'Waiting for confirmation';
+    const waitCopy = flow.message || (pushing ? 'Inatuma USSD…' : payWaitHint(flow));
+    body = `<div class="debt-step debt-wait" aria-live="polite" aria-busy="true">
+      <div class="debt-spinner" aria-hidden="true"></div>
+      <h3>${esc(waitTitle)}</h3>
+      <p class="debt-wait-status">${esc(waitCopy)}</p>
+      <p class="muted">${flow.orderId
+        ? `Reference ${esc(flow.orderId)} · ${esc(moneyTsh(amount))}`
+        : `${esc(payNetworkLabel(flow.network))} · ${esc(flow.phone || '—')} · ${esc(moneyTsh(amount))}`}</p>
       <div class="debt-sheet-actions">
-        <button class="btn line" type="button" data-pay="verify" ${busy ? 'disabled' : ''}>${busy ? 'Inakagua…' : 'Angalia hali'}</button>
-        <button class="btn line" type="button" data-pay="close">Funga</button>
+        <button class="btn line${busy && flow.orderId ? ' is-busy' : ''}" type="button" data-pay="verify" ${busy || !flow.orderId ? 'disabled' : ''} aria-busy="${busy && flow.orderId ? 'true' : 'false'}">${busy && flow.orderId ? btnBusyLabel('Inakagua…') : 'Check status'}</button>
+        <button class="btn line" type="button" data-pay="close" ${pushing ? 'disabled' : ''}>Close</button>
       </div>
     </div>`;
   } else {
@@ -3948,7 +3952,7 @@ function paymentsPage() {
           <div><span>Unpaid orders</span><strong>${snap.unpaidOrders.length}</strong></div>
         </div>
         <div class="debt-hero-actions">
-          <button class="btn debt-pay-btn" type="button" data-pay="open" ${snap.outstanding < 100 ? 'disabled' : ''}>Pay Now</button>
+          <button class="btn debt-pay-btn${state.payOpening ? ' is-busy is-pressed' : ''}" type="button" data-pay="open" ${snap.outstanding < 100 || state.payOpening ? 'disabled' : ''} aria-busy="${state.payOpening ? 'true' : 'false'}">${state.payOpening ? btnBusyLabel('Opening…') : 'Pay Now'}</button>
           ${pendingOpen ? `<button class="btn line" type="button" data-pay="resume">Resume pending payment</button>` : ''}
         </div>
         ${snap.outstanding < 100 ? '<p class="muted debt-zero">No outstanding Haul commission right now.</p>' : ''}
@@ -4043,7 +4047,8 @@ async function postCommissionUssd(body, { attempt = 1 } = {}) {
       method: 'POST',
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(35000),
+      // Keep the request tight; one retry covers brief network blips without a long silent hang.
+      signal: AbortSignal.timeout(20000),
     });
   } catch (error) {
     const transient = /timeout|aborted|AbortError|network|Failed to fetch/i.test(String(error?.name || error?.message || ''));
@@ -4077,7 +4082,12 @@ async function initiateDebtPayment() {
   if (!['mpesa', 'mixx', 'airtel'].includes(network)) throw new Error('Mtandao huu haupo.');
   if (!flow.idempotencyKey) flow.idempotencyKey = newPayIdempotencyKey();
   flow.phone = phone;
+  // Instant feedback: leave summary for the original wait spinner before the network round-trip.
   state.payBusy = true;
+  flow.step = 'confirm';
+  flow.status = 'pushing';
+  flow.message = 'Inatuma USSD…';
+  showToast('Inatuma USSD…');
   render();
   try {
     const unpaidOrders = (snap.unpaidOrders || []).map((row) => String(row.item?.id || '')).filter(Boolean).slice(0, 40);
@@ -4102,7 +4112,6 @@ async function initiateDebtPayment() {
         (payload.status === 'completed' && payload.settled));
     flow.orderId = orderId;
     flow.reference = reference;
-    flow.message = payload.message || 'Subiri uthibitisho kwenye simu.';
     flow.amount = Math.round(Number(payload.amount) || amount);
     flow.pollTicks = 0;
     if (state.carrier) {
@@ -4126,6 +4135,7 @@ async function initiateDebtPayment() {
       flow.message = 'Malipo yamefanikiwa. Commission imethibitishwa.';
       flow.reference = reference || flow.orderId;
       state.payBusy = false;
+      showToast(flow.message);
       await refreshFinanceSnapshot(true);
       render();
       return;
@@ -4135,7 +4145,7 @@ async function initiateDebtPayment() {
       flow.idempotencyKey = '';
       state.payBusy = false;
       showToast(failMsg);
-      flow.step = 'summary';
+      flow.step = 'result';
       flow.status = 'failed';
       flow.message = failMsg;
       render();
@@ -4159,8 +4169,8 @@ async function initiateDebtPayment() {
         ? 'USSD imetumwa. Thibitisha kwenye simu.'
         : payload.message || 'Subiri uthibitisho kwenye simu.';
     state.payBusy = false;
-    render();
     showToast(flow.message);
+    render();
     pollDebtPayment(flow.orderId);
   } catch (error) {
     state.payBusy = false;
@@ -4277,7 +4287,14 @@ async function handleDebtPayClick(event) {
   const act = btn.dataset.pay;
   const snap = debtSnapshot();
   if (act === 'open') {
-    openPayFlow({ amount: snap.outstanding, mode: 'full' });
+    if (state.payOpening || state.payBusy) return true;
+    state.payOpening = true;
+    btn.classList.add('is-busy', 'is-pressed');
+    btn.setAttribute('aria-busy', 'true');
+    btn.setAttribute('disabled', 'true');
+    btn.innerHTML = btnBusyLabel('Opening…');
+    // Paint pressed/busy state first, then open the sheet.
+    requestAnimationFrame(() => openPayFlow({ amount: snap.outstanding, mode: 'full' }));
     return true;
   }
   if (act === 'resume') {
@@ -4366,6 +4383,10 @@ async function handleDebtPayClick(event) {
   }
   if (act === 'confirm') {
     if (state.payBusy) return true;
+    btn.classList.add('is-busy', 'is-pressed');
+    btn.setAttribute('aria-busy', 'true');
+    btn.setAttribute('disabled', 'true');
+    btn.innerHTML = btnBusyLabel('Inatuma USSD…');
     try {
       await initiateDebtPayment();
     } catch (error) {
