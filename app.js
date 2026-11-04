@@ -3687,6 +3687,25 @@ function isValidPayPhone(value) {
   return /^255[67]\d{8}$/.test(normalizePayPhone(value));
 }
 
+/** Detect M-Pesa / Mixx / Airtel from TZ prefix when unambiguous. */
+function detectPayNetworkFromPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  const local = digits.startsWith('255')
+    ? digits.slice(3)
+    : digits.startsWith('0')
+      ? digits.slice(1)
+      : digits;
+  const prefix = local.slice(0, 2);
+  if (['74', '75', '76'].includes(prefix)) return 'mpesa';
+  if (['65', '67', '71', '77'].includes(prefix)) return 'mixx';
+  if (['68', '69', '78'].includes(prefix)) return 'airtel';
+  return '';
+}
+
+function payNetworkMismatchMessage() {
+  return 'Namba hii si ya mtandao uliochagua. Chagua mtandao sahihi.';
+}
+
 function newPayIdempotencyKey() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID().replace(/-/g, '');
@@ -3730,7 +3749,8 @@ function payWaitHint(flow) {
   const ticks = Math.max(0, Number(flow?.pollTicks) || 0);
   if (ticks >= 20) return 'Bado tunasubiri uthibitisho kutoka TrivaPesa…';
   if (ticks >= 8) return 'Thibitisha USSD kwenye simu yako, kisha subiri.';
-  return 'Subiri uthibitisho kwenye simu.';
+  if (flow?.reference) return 'Angalia simu yako';
+  return 'Inaanzisha USSD…';
 }
 
 function btnBusyLabel(label) {
@@ -3840,8 +3860,13 @@ function payFlowSheet(snap) {
     </div>`;
   } else if (flow.step === 'confirm') {
     const pushing = busy && !flow.orderId;
-    const waitTitle = pushing ? 'Inatuma USSD…' : 'Waiting for confirmation';
-    const waitCopy = flow.message || (pushing ? 'Inatuma USSD…' : payWaitHint(flow));
+    const initiating = flow.status === 'creating' || flow.status === 'pushing' || (Boolean(flow.orderId) && !flow.reference);
+    const waitTitle = pushing || initiating
+      ? (flow.reference ? 'Angalia simu yako' : 'Inatuma USSD…')
+      : 'Waiting for confirmation';
+    const waitCopy = flow.message || (pushing || initiating
+      ? (flow.reference ? 'Angalia simu — USSD push imetumwa' : 'Inatuma USSD…')
+      : payWaitHint(flow));
     body = `<div class="debt-step debt-wait" aria-live="polite" aria-busy="true">
       <div class="debt-spinner" aria-hidden="true"></div>
       <h3>${esc(waitTitle)}</h3>
@@ -4055,11 +4080,11 @@ async function postCommissionUssd(body, { attempt = 1 } = {}) {
     if (attempt < 2 && transient) {
       return postCommissionUssd(body, { attempt: attempt + 1 });
     }
-    throw Object.assign(new Error('USSD haijatumwa. Jaribu tena.'), { statusCode: 0, retryable: true });
+    throw Object.assign(new Error('Haijatumwa — jaribu tena'), { statusCode: 0, retryable: true });
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = payload.error || payload.message || 'USSD haijatumwa. Jaribu tena.';
+    const message = payload.error || payload.message || 'Haijatumwa — jaribu tena';
     const retryable = response.status >= 500 || response.status === 429 || response.status === 408;
     if (attempt < 2 && retryable) {
       return postCommissionUssd(body, { attempt: attempt + 1 });
@@ -4080,6 +4105,10 @@ async function initiateDebtPayment() {
   if (amount > snap.outstanding) throw new Error('Amount cannot exceed outstanding balance.');
   if (!isValidPayPhone(phone)) throw new Error('Weka namba sahihi ya simu.');
   if (!['mpesa', 'mixx', 'airtel'].includes(network)) throw new Error('Mtandao huu haupo.');
+  const detectedNetwork = detectPayNetworkFromPhone(phone);
+  if (detectedNetwork && detectedNetwork !== network) {
+    throw new Error(payNetworkMismatchMessage());
+  }
   if (!flow.idempotencyKey) flow.idempotencyKey = newPayIdempotencyKey();
   flow.phone = phone;
   // Instant feedback: leave summary for the original wait spinner before the network round-trip.
@@ -4102,16 +4131,16 @@ async function initiateDebtPayment() {
     });
     const orderId = String(payload.orderId || '').trim();
     const reference = String(payload.trivapesaReference || payload.reference || '').trim();
-    // Only advance when the API accepted an order. Prefer an explicit push/reference; allow duplicate pending without ref while a create is in flight.
-    const accepted =
+    // Only claim a real push when backend says so AND provider reference is present.
+    const pushedOk = payload.pushed === true && Boolean(reference);
+    const settledOk = payload.status === 'completed' && payload.settled;
+    const initiatingOk =
       Boolean(orderId) &&
-      (payload.pushed === true ||
-        Boolean(reference) ||
-        payload.duplicate === true ||
-        payload.status === 'pending' ||
-        (payload.status === 'completed' && payload.settled));
+      !pushedOk &&
+      !settledOk &&
+      (payload.status === 'creating' || payload.duplicate === true);
     flow.orderId = orderId;
-    flow.reference = reference;
+    flow.reference = pushedOk ? reference : '';
     flow.amount = Math.round(Number(payload.amount) || amount);
     flow.pollTicks = 0;
     if (state.carrier) {
@@ -4120,16 +4149,16 @@ async function initiateDebtPayment() {
         commissionPayerPhone: phone,
         commissionPayment: {
           orderId: flow.orderId,
-          status: payload.status === 'completed' ? 'completed' : 'pending',
+          status: payload.status === 'completed' ? 'completed' : pushedOk ? 'pending' : 'creating',
           amount: flow.amount,
           network,
           payerPhone: phone,
-          trivapesaReference: reference || undefined,
+          trivapesaReference: pushedOk ? reference : undefined,
           createdAtMs: Date.now(),
         },
       };
     }
-    if (payload.status === 'completed' && payload.settled) {
+    if (settledOk) {
       flow.step = 'result';
       flow.status = 'completed';
       flow.message = 'Malipo yamefanikiwa. Commission imethibitishwa.';
@@ -4141,7 +4170,7 @@ async function initiateDebtPayment() {
       return;
     }
     if (payload.status === 'failed') {
-      const failMsg = mapPayOutcomeMessage(payload, 'Malipo yameshindikana.');
+      const failMsg = mapPayOutcomeMessage(payload, 'Haijatumwa — jaribu tena');
       flow.idempotencyKey = '';
       state.payBusy = false;
       showToast(failMsg);
@@ -4151,32 +4180,40 @@ async function initiateDebtPayment() {
       render();
       return;
     }
-    if (!accepted) {
-      const failMsg = payload.message || payload.error || 'USSD haijatumwa. Jaribu tena.';
-      flow.idempotencyKey = '';
+    if (pushedOk) {
+      flow.step = 'confirm';
+      flow.status = 'pending';
+      flow.message = 'Angalia simu — USSD push imetumwa';
       state.payBusy = false;
-      showToast(failMsg);
-      flow.step = 'summary';
-      flow.status = '';
-      flow.message = failMsg;
+      showToast(flow.message);
       render();
+      pollDebtPayment(flow.orderId);
       return;
     }
-    flow.step = 'confirm';
-    flow.status = 'pending';
-    flow.message =
-      payload.pushed === true || reference
-        ? 'USSD imetumwa. Thibitisha kwenye simu.'
-        : payload.message || 'Subiri uthibitisho kwenye simu.';
+    if (initiatingOk) {
+      // Provider has not confirmed a reference yet — never toast "imetumwa".
+      flow.step = 'confirm';
+      flow.status = 'creating';
+      flow.message = payload.message || 'Inaanzisha USSD…';
+      state.payBusy = false;
+      showToast(flow.message);
+      render();
+      pollDebtPayment(flow.orderId);
+      return;
+    }
+    const failMsg = payload.message || payload.error || 'Haijatumwa — jaribu tena';
+    flow.idempotencyKey = '';
     state.payBusy = false;
-    showToast(flow.message);
+    showToast(failMsg);
+    flow.step = 'summary';
+    flow.status = '';
+    flow.message = failMsg;
     render();
-    pollDebtPayment(flow.orderId);
   } catch (error) {
     state.payBusy = false;
     const failMsg = mapPayOutcomeMessage(
       error?.payload || { message: error?.message, error: error?.message },
-      error?.message || 'USSD haijatumwa. Jaribu tena.'
+      error?.message || 'Haijatumwa — jaribu tena'
     );
     // Keep the same idempotency key so a manual retry cannot double-push after a transient failure.
     if (!error?.retryable) flow.idempotencyKey = '';
@@ -4228,9 +4265,13 @@ async function verifyDebtPayment(orderId, { quiet = false } = {}) {
           };
         }
       } else {
+        const verifyRef = String(payload.reference || state.payFlow.reference || '').trim();
+        if (verifyRef) state.payFlow.reference = verifyRef;
         state.payFlow.step = 'confirm';
-        state.payFlow.status = 'pending';
-        state.payFlow.message = payload.message || payWaitHint(state.payFlow);
+        state.payFlow.status = verifyRef || payload.pushed === true ? 'pending' : 'creating';
+        state.payFlow.message =
+          payload.message ||
+          (verifyRef || payload.pushed === true ? 'Angalia simu yako' : 'Inaanzisha USSD…');
       }
     }
     return payload;
@@ -4367,6 +4408,12 @@ async function handleDebtPayClick(event) {
     const normalized = normalizePayPhone(phone?.value || state.payFlow.phone || '');
     if (!isValidPayPhone(normalized)) {
       showToast('Weka namba sahihi ya simu (07… au 255…).');
+      return true;
+    }
+    const network = String(state.payFlow.network || '').trim().toLowerCase();
+    const detected = detectPayNetworkFromPhone(normalized);
+    if (detected && network && detected !== network) {
+      showToast(payNetworkMismatchMessage());
       return true;
     }
     state.payFlow.phone = normalized;
