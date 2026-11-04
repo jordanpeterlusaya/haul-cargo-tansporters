@@ -131,6 +131,7 @@ const state = {
   deskTo: '',
   deskFocus: '',
   dashRange: '14d',
+  historyFilter: 'all',
   stageBusy: '',
   stageBusyIds: {},
   pendingStages: {},
@@ -2987,14 +2988,116 @@ function availableOrdersPage() {
     ${ordersTable(rows, true)}</section>`;
 }
 
+function historyStatusKey(item) {
+  const status = String(item?.shipmentStatus || '').toLowerCase();
+  const step = String(item?.trackStep || '').toLowerCase();
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'delivered' || step === 'handed') return 'delivered';
+  if (status === 'arrived' || step === 'arrived') return 'completed';
+  return '';
+}
+
+function isHistoryPast(item) {
+  return Boolean(item?.carrierId === state.carrier?.id && historyStatusKey(item));
+}
+
+function historyStamp(item) {
+  return timeMs(item?.deliveredAt)
+    || timeMs(item?.cancelledAt)
+    || timeMs(item?.arrivedAt)
+    || timeMs(item?.updatedAt)
+    || timeMs(item?.acceptedAt)
+    || timeMs(item?.createdAt);
+}
+
+function historyStatusChip(item) {
+  const key = historyStatusKey(item);
+  if (key === 'delivered') return '<span class="badge stage-delivered">Delivered</span>';
+  if (key === 'completed') return '<span class="debt-chip ok">Completed</span>';
+  if (key === 'cancelled') return '<span class="badge stage-cancelled">Cancelled</span>';
+  return badge(item?.shipmentStatus);
+}
+
 function historyPage() {
-  const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
-  const completed = owned.filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived');
-  const accepted = owned.filter((item) => ['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus'].includes(item.shipmentStatus));
-  const transit = owned.filter((item) => item.shipmentStatus === 'in_transit');
-  const declined = state.shipments.filter((item) => Array.isArray(item.declinedCarrierIds) && item.declinedCarrierIds.includes(state.carrier?.id));
-  const block = (title, rows) => `<section class="panel"><div class="section-head"><h2>${title}</h2><span class="muted">${rows.length}</span></div>${ordersTable(rows, false)}</section>`;
-  return `${block('Completed orders', completed)}${block('Accepted', accepted)}${block('In transit', transit)}${declined.length ? block('Declined', declined) : ''}`;
+  const company = state.carrier?.companyName || 'Transporter';
+  const filter = ['delivered', 'completed', 'cancelled'].includes(state.historyFilter) ? state.historyFilter : 'all';
+  const past = state.shipments
+    .filter(isHistoryPast)
+    .sort((a, b) => historyStamp(b) - historyStamp(a));
+  const delivered = past.filter((item) => historyStatusKey(item) === 'delivered');
+  const completed = past.filter((item) => historyStatusKey(item) === 'completed');
+  const cancelled = past.filter((item) => historyStatusKey(item) === 'cancelled');
+  const rows = filter === 'all' ? past : past.filter((item) => historyStatusKey(item) === filter);
+  const mapato = [...delivered, ...completed].reduce((sum, item) => sum + priceOf(item), 0);
+  const commission = [...delivered, ...completed].reduce((sum, item) => sum + commissionParts(item).fee, 0);
+  const emptyCopy = filter === 'cancelled'
+    ? 'Hakuna oda zilizofutwa kwenye historia yako.'
+    : filter === 'delivered'
+      ? 'Hakuna oda zilizokabidhiwa bado.'
+      : filter === 'completed'
+        ? 'Hakuna oda zilizokamilika (Imefika) bado.'
+        : 'Hakuna oda za historia bado. Oda zilizokamilika, zilizokabidhiwa, au zilizofutwa zitaonekana hapa.';
+  const table = rows.length
+    ? `<div class="table-wrap orders-table-card hist-table"><table class="ops-table">
+        <thead><tr>
+          <th>Order</th><th>Route</th><th>Date</th><th>Amount</th><th>Commission</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>${rows.map((item) => {
+          const fee = commissionParts(item);
+          const amount = priceOf(item);
+          const from = shortPlace(item.origin || item.pickupLabel);
+          const to = shortPlace(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+          return `<tr>
+            <td><strong class="order-id">${esc(shipmentCode(item))}</strong>
+              <div class="cell-sub">${esc(item.customerName || item.senderName || '—')}</div></td>
+            <td>${esc(from)}<div class="cell-sub">${esc(to)}</div></td>
+            <td>${esc(when(item.deliveredAt || item.cancelledAt || item.arrivedAt || item.updatedAt || item.createdAt))}</td>
+            <td>${amount > 0 ? money(amount) : '—'}</td>
+            <td>${fee.recorded ? money(fee.fee) : (fee.fee > 0 ? money(fee.fee) : '—')}</td>
+            <td>${historyStatusChip(item)}</td>
+            <td class="actions"><a class="btn line small" href="#/assignment/${esc(item.id)}">Open</a></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`
+    : `<div class="hist-empty">
+        <p class="so-kicker">History</p>
+        <h3>No past orders here</h3>
+        <p class="muted">${esc(emptyCopy)}</p>
+      </div>`;
+
+  const filterBtn = (key, label, count) => `<button class="so-range-btn ${filter === key ? 'is-active' : ''}" type="button" data-history-filter="${key}">${esc(label)} · ${count}</button>`;
+
+  return `<section class="sales-overview hist-page">
+    <header class="so-head">
+      <div>
+        <p class="so-kicker">HAUL · History · ${esc(company)}</p>
+        <h2>Past orders</h2>
+        <p class="so-sub">Delivered, completed, and cancelled jobs from live portal data</p>
+      </div>
+      <div class="so-controls" role="group" aria-label="History filter">
+        ${filterBtn('all', 'All', past.length)}
+        ${filterBtn('delivered', 'Delivered', delivered.length)}
+        ${filterBtn('completed', 'Completed', completed.length)}
+        ${filterBtn('cancelled', 'Cancelled', cancelled.length)}
+      </div>
+    </header>
+
+    <section class="so-kpis hist-kpis" aria-label="History totals">
+      ${kpiCard('Delivered', String(delivered.length), delivered.length ? 'live' : '')}
+      ${kpiCard('Completed', String(completed.length))}
+      ${kpiCard('Cancelled', String(cancelled.length), cancelled.length ? 'hot' : '')}
+      ${kpiCard('Mapato', money(mapato))}
+      ${kpiCard('Commission', money(commission))}
+    </section>
+
+    <section class="so-card hist-card" aria-label="Order history">
+      <div class="so-chart-head">
+        <h3>${filter === 'all' ? 'All past orders' : filter === 'delivered' ? 'Delivered' : filter === 'completed' ? 'Completed' : 'Cancelled'}</h3>
+        <span>${rows.length} ${rows.length === 1 ? 'order' : 'orders'}</span>
+      </div>
+      ${table}
+    </section>
+  </section>`;
 }
 
 function transitOrdersPage() {
@@ -3299,9 +3402,39 @@ function companyStanding() {
   const postAcceptCancels = Number(carrier.postAcceptCancels) || 0;
   const decisions = completed + rejects;
   const cancelRate = decisions > 0 ? rejects / decisions : 0;
-  const closure = Boolean(carrier.offersPaused || carrier.fraudHold) || postAcceptCancels >= 3 || (cancelRate >= 0.4 && decisions >= 8);
+  const statusKey = String(carrier.status || '').toLowerCase();
+  const suspended = statusKey === 'suspended';
+  const hold = carrier.fraudHold && typeof carrier.fraudHold === 'object' ? carrier.fraudHold : null;
+  const offersPaused = Boolean(carrier.offersPaused || hold);
+  const rateClosure = postAcceptCancels >= 3 || (cancelRate >= 0.4 && decisions >= 8);
+  const closure = offersPaused || rateClosure;
   const unpaid = owned.reduce((sum, item) => sum + commissionParts(item).outstanding, 0);
   const ceiling = BRONZE_MEMBERSHIP.payCeilingTzs;
+  const paywall = unpaid >= ceiling;
+  const blocked = suspended || closure || paywall;
+  const holdReason = String(hold?.reason || '').trim();
+  let kind = '';
+  let title = '';
+  let reason = '';
+  let cta = null;
+  if (suspended) {
+    kind = 'suspended';
+    title = 'Akaunti imesimamishwa';
+    reason = carrierStatusHint('suspended');
+  } else if (closure) {
+    kind = 'closure';
+    title = 'Kampuni imefungwa kupokea oda';
+    reason = holdReason
+      ? `Ofa mpya zimesimamishwa: ${holdReason}. Akaunti haijafutwa — wasiliana na HAUL.`
+      : (offersPaused
+        ? 'Ofa mpya zimesimamishwa. Akaunti haijafutwa — wasiliana na HAUL.'
+        : 'Ofa mpya zimesimamishwa kwa sababu ya cancel rate au kufuta baada ya kukubali. Wasiliana na HAUL.');
+  } else if (paywall) {
+    kind = 'paywall';
+    title = 'Ofa mpya zimesimama';
+    reason = `Kamisheni haijalipwa ${moneyTsh(unpaid)} imefikia au kuzidi ceiling ${moneyTsh(ceiling)}. Lipa kwenye Payments ili ufunguliwe tena.`;
+    cta = { label: 'Open Payments', go: 'payments' };
+  }
   return {
     completed,
     rejects,
@@ -3312,11 +3445,35 @@ function companyStanding() {
     tier: BRONZE_MEMBERSHIP,
     unpaid,
     ceiling,
-    blocked: closure || unpaid >= ceiling,
-    reason: closure
-      ? (carrier.fraudHold?.reason || 'New offers are paused until Haul clears this account.')
-      : (unpaid >= ceiling ? 'New offers are paused until commission is paid.' : ''),
+    blocked,
+    suspended,
+    paywall,
+    kind,
+    title,
+    reason,
+    cta,
   };
+}
+
+/** Large account-lock alert from real flags only (offersPaused, fraudHold, paywall, suspended). */
+function ordersLockBanner() {
+  if (!state.carrier) return '';
+  const standing = companyStanding();
+  if (!standing.blocked) return '';
+  const cta = standing.cta
+    ? `<button class="btn lock-banner-cta" data-go="${esc(standing.cta.go)}" type="button">${esc(standing.cta.label)}</button>`
+    : (standing.kind === 'paywall'
+      ? `<button class="btn lock-banner-cta" data-go="payments" type="button">Open Payments</button>`
+      : `<button class="btn lock-banner-cta line" data-go="finance" type="button">View Finance</button>`);
+  return `<aside class="lock-banner" role="alert" aria-live="assertive">
+    <div class="lock-banner-mark" aria-hidden="true">${uiIcon('lock')}</div>
+    <div class="lock-banner-copy">
+      <p class="lock-banner-kicker">HAUL · Account locked</p>
+      <h2>${esc(standing.title || 'Orders paused')}</h2>
+      <p>${esc(standing.reason || 'New offers are paused.')}</p>
+    </div>
+    <div class="lock-banner-actions">${cta}</div>
+  </aside>`;
 }
 
 function financePage() {
@@ -3330,9 +3487,6 @@ function financePage() {
     .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0))
     .slice(0, 5);
   const unpaidPreview = snap.unpaidOrders.slice(0, 6);
-  const notice = standing.blocked
-    ? `<p class="form-error fin-notice">${esc(standing.reason)}</p>`
-    : '';
   const paymentRows = payments.length
     ? `<div class="table-wrap"><table class="ops-table debt-table">
         <thead><tr><th>Date</th><th>Amount</th><th>Status</th></tr></thead>
@@ -3359,7 +3513,7 @@ function financePage() {
       </table></div>`
     : '<p class="empty">No unpaid commission on completed orders.</p>';
 
-  return `${notice}<section class="sales-overview fin-page">
+  return `<section class="sales-overview fin-page">
     <header class="so-head">
       <div>
         <p class="so-kicker">HAUL · Finance · ${esc(company)}</p>
@@ -5272,7 +5426,8 @@ async function render() {
   else if (page === 'sticker') html = stickerPage(id);
   else if (['profile', 'verification', 'staff', 'notifications'].includes(page)) html = companyPages();
   else html = dashboard();
-  viewEl.innerHTML = html;
+  const lockBanner = state.carrier ? ordersLockBanner() : '';
+  viewEl.innerHTML = `${lockBanner}${html}`;
   if ((page === 'payments' || page === 'fedha' || page === 'finance') && !state.payFlow) {
     const snapshotAt = state.financeSnapshotAt || 0;
     refreshFinanceSnapshot().then((payload) => {
@@ -5509,6 +5664,17 @@ async function onViewClick(event) {
     const next = dashRangeBtn.dataset.dashRange === 'month' ? 'month' : '14d';
     if (state.dashRange !== next) {
       state.dashRange = next;
+      render();
+    }
+    return;
+  }
+  const historyFilterBtn = event.target.closest('[data-history-filter]');
+  if (historyFilterBtn) {
+    const next = String(historyFilterBtn.dataset.historyFilter || 'all');
+    const allowed = ['all', 'delivered', 'completed', 'cancelled'];
+    const value = allowed.includes(next) ? next : 'all';
+    if (state.historyFilter !== value) {
+      state.historyFilter = value;
       render();
     }
     return;
