@@ -134,6 +134,11 @@ const state = {
   stageBusy: '',
   stageBusyIds: {},
   pendingStages: {},
+  commissionPayments: [],
+  financeSnapshot: null,
+  financeSnapshotAt: 0,
+  payFlow: null,
+  payBusy: false,
 };
 
 let countdownTimer = null;
@@ -246,6 +251,12 @@ function norm(value) {
 }
 function money(amount) {
   return `TZS ${Math.round(Number(amount) || 0).toLocaleString('en-US')}`;
+}
+function moneyTsh(amount) {
+  return `TSh ${Math.round(Number(amount) || 0).toLocaleString('en-US')}`;
+}
+function apiBase() {
+  return (globalThis.DOORDROP_ADMIN_CONFIG?.apiBaseUrl || 'https://us-central1-efootball-app-9d175.cloudfunctions.net/api').replace(/\/+$/, '');
 }
 function esc(value) {
   return String(value ?? '')
@@ -1287,6 +1298,7 @@ const NAV_ICON = {
   history: '<circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/>',
   drivers: '<circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.2"/><path d="M16 19a4 4 0 0 1 4.5-3.5"/>',
   finance: '<path d="M4 7h16v12H4z"/><path d="M4 11h16"/><path d="M8 15h4"/>',
+  payments: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/>',
   levels: '<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',
   profile: '<circle cx="12" cy="8" r="3"/><path d="M5 19a7 7 0 0 1 14 0"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/>',
@@ -1303,6 +1315,7 @@ const NAV = [
   ['transit', 'In Transit'],
   ['history', 'History'],
   ['drivers', 'Drivers'],
+  ['payments', 'Payments'],
   ['finance', 'Finance'],
   ['levels', 'Levels'],
   ['profile', 'Company Profile'],
@@ -1322,7 +1335,8 @@ const FOLDED = {
   staff: 'drivers',
   routes: 'settings',
   fares: 'finance',
-  payments: 'finance',
+  payments: 'payments',
+  fedha: 'payments',
   receipts: 'history',
   customers: 'history',
   reports: 'finance',
@@ -2778,7 +2792,7 @@ async function sendCompanyQuote(shipmentId, amount) {
 
 async function portalCall(path, body) {
   const token = await state.user.getIdToken();
-  const base = (globalThis.DOORDROP_ADMIN_CONFIG?.apiBaseUrl || 'https://us-central1-efootball-app-9d175.cloudfunctions.net/api').replace(/\/+$/, '');
+  const base = apiBase();
   const response = await fetch(`${base}${path}`, {
     method: body ? 'POST' : 'GET',
     headers: {
@@ -3158,19 +3172,16 @@ function financePage() {
     <button class="btn line small" data-go="levels" type="button">Level benefits</button>
   </section>
   ${monthRows.length ? `<section class="panel"><h2>Commission by month</h2><div class="month-bars">${monthRows.map(([label, value]) => `<div><span>${esc(label)}</span><i style="width:${Math.round((value / monthMax) * 100)}%"></i><b>${money(value)}</b></div>`).join('')}</div></section>` : ''}
-  <section class="panel"><h2>Pay commission</h2>
-    <p class="muted">USSD push via M-Pesa, Mixx, or Airtel. Any amount up to the unpaid balance.</p>
-    <form id="commissionForm" class="form-grid">
-      <input name="amount" type="number" min="100" max="${standing.unpaid || 0}" placeholder="Amount TZS" value="${standing.unpaid || ''}" required />
-      <input name="phone" placeholder="07…" value="${esc(state.carrier?.commissionPayerPhone || state.carrier?.phone || '')}" required />
-      <select name="network" required>
-        <option value="mpesa">M-Pesa</option>
-        <option value="mixx">Mixx by Yas</option>
-        <option value="airtel">Airtel Money</option>
-      </select>
-      <button class="btn primary" type="submit" ${standing.unpaid < 100 ? 'disabled' : ''}>Send USSD</button>
-    </form>
-    <p class="muted" id="payNote"></p>
+  <section class="panel debt-finance-cta">
+    <div>
+      <p class="lp-kicker">Debt settlement</p>
+      <h2>Pay outstanding Haul commission</h2>
+      <p class="muted">Settle full or partial balances via M-Pesa, Mixx, or Airtel. Balance updates only after verified payment.</p>
+    </div>
+    <div class="debt-finance-cta-actions">
+      <strong>${esc(moneyTsh(standing.unpaid))}</strong>
+      <button class="btn primary" data-go="payments" type="button">Open Payments</button>
+    </div>
   </section>
   <section class="panel"><h2>Commission by order</h2>
     ${delivered.length ? `<div class="table-wrap"><table class="ops-table"><thead><tr><th>Order</th><th>Route</th><th>Delivered</th><th>Earned</th><th>Paid</th><th>Outstanding</th><th>State</th></tr></thead><tbody>${delivered.map((item) => {
@@ -3628,26 +3639,570 @@ function reportsPage() {
     </div>`;
 }
 
-function paymentsPage() {
-  const rows = ownedRows();
-  const unpaid = rows.filter((item) => (item.cashStatus || 'unpaid') === 'unpaid');
-  const settled = rows.filter((item) => item.cashStatus && item.cashStatus !== 'unpaid');
-  const unpaidSum = unpaid.reduce((sum, item) => sum + priceOf(item), 0);
-  const settledSum = settled.reduce((sum, item) => sum + priceOf(item), 0);
-  const list = (items, empty) => (items.length
-    ? `<div class="cargo-list">${items.map((item) => `<article class="cargo-item">
-      <div class="cargo-item-body">
-        <strong>${esc(dropOffLabel(item))}</strong>
-        <span class="cargo-item-meta">${money(priceOf(item))} · ${badge(cashStatusLabel(item.cashStatus))}</span>
+function debtSnapshot() {
+  const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
+  const delivered = owned.filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived');
+  const rows = delivered.map((item) => {
+    const part = commissionParts(item);
+    return {
+      item,
+      fee: part.fee,
+      paid: part.paid,
+      outstanding: part.outstanding,
+      thamani: declaredValueOf(item),
+    };
+  });
+  const totalDebt = rows.reduce((sum, row) => sum + row.fee, 0);
+  const totalPaid = rows.reduce((sum, row) => sum + row.paid, 0);
+  const outstanding = rows.reduce((sum, row) => sum + row.outstanding, 0);
+  const unpaidOrders = rows.filter((row) => row.outstanding > 0);
+  return { rows, delivered, unpaidOrders, totalDebt, totalPaid, outstanding };
+}
+
+function payNetworkLabel(key) {
+  const map = { mpesa: 'M-Pesa', mixx: 'Mixx by Yas', airtel: 'Airtel Money' };
+  return map[String(key || '').toLowerCase()] || String(key || 'Mobile money');
+}
+
+function payStatusChip(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'completed' || key === 'success' || key === 'paid') return `<span class="debt-chip ok">Completed</span>`;
+  if (key === 'failed' || key === 'failure' || key === 'cancelled' || key === 'canceled') return `<span class="debt-chip bad">Failed</span>`;
+  if (key === 'pending' || key === 'creating' || key === 'processing') return `<span class="debt-chip wait">Pending</span>`;
+  return `<span class="debt-chip">${esc(status || 'Unknown')}</span>`;
+}
+
+function openPayFlow(seed = {}) {
+  const snap = debtSnapshot();
+  const outstanding = Math.max(0, Math.round(Number(seed.amount ?? snap.outstanding) || 0));
+  state.payFlow = {
+    step: seed.step || 'amount',
+    mode: seed.mode || 'full',
+    amount: outstanding,
+    phone: String(seed.phone || state.carrier?.commissionPayerPhone || state.carrier?.phone || ''),
+    network: String(seed.network || 'mpesa'),
+    orderId: seed.orderId || '',
+    reference: seed.reference || '',
+    status: seed.status || '',
+    message: seed.message || '',
+    unpaidBefore: outstanding,
+  };
+  render();
+}
+
+function closePayFlow() {
+  state.payFlow = null;
+  state.payBusy = false;
+  render();
+}
+
+function payFlowSheet(snap) {
+  const flow = state.payFlow;
+  if (!flow) return '';
+  const outstanding = Math.max(0, Math.round(snap.outstanding || 0));
+  const amount = Math.max(0, Math.round(Number(flow.amount) || 0));
+  const busy = state.payBusy;
+  const steps = ['amount', 'method', 'summary', 'confirm', 'result'];
+  const index = Math.max(0, steps.indexOf(flow.step));
+  const progress = steps.map((key, i) => `<span class="${i <= index ? 'on' : ''}"></span>`).join('');
+  let body = '';
+  if (flow.step === 'amount') {
+    body = `<div class="debt-step">
+      <h3>How much will you settle?</h3>
+      <p class="muted">Outstanding balance ${esc(moneyTsh(outstanding))}.</p>
+      <div class="debt-mode-grid">
+        <button type="button" class="debt-mode ${flow.mode === 'full' ? 'is-on' : ''}" data-pay="mode" data-mode="full" ${outstanding < 100 ? 'disabled' : ''}>
+          <strong>Pay in full</strong>
+          <span>${esc(moneyTsh(outstanding))}</span>
+        </button>
+        <button type="button" class="debt-mode ${flow.mode === 'partial' ? 'is-on' : ''}" data-pay="mode" data-mode="partial" ${outstanding < 100 ? 'disabled' : ''}>
+          <strong>Pay partial</strong>
+          <span>Custom amount</span>
+        </button>
       </div>
-    </article>`).join('')}</div>`
-    : `<p class="empty">${empty}</p>`);
-  return `<div class="finance-row">
-      <article class="stat"><span>Haijalipwa</span><strong>${esc(money(unpaidSum))}</strong></article>
-      <article class="stat"><span>Imeshapatana</span><strong>${esc(money(settledSum))}</strong></article>
+      ${flow.mode === 'partial' ? `<label class="debt-field"><span>Amount (TSh)</span>
+        <input id="payAmountInput" type="number" min="100" max="${outstanding}" step="1" value="${Math.min(amount || outstanding, outstanding) || ''}" />
+      </label>` : ''}
+      <div class="debt-sheet-actions">
+        <button class="btn line" type="button" data-pay="close">Cancel</button>
+        <button class="btn primary" type="button" data-pay="to-method" ${outstanding < 100 ? 'disabled' : ''}>Continue</button>
+      </div>
+    </div>`;
+  } else if (flow.step === 'method') {
+    body = `<div class="debt-step">
+      <h3>Payment method</h3>
+      <p class="muted">USSD push via TrivaPesa — approve on the phone.</p>
+      <div class="debt-networks">
+        ${[['mpesa', 'M-Pesa'], ['mixx', 'Mixx by Yas'], ['airtel', 'Airtel Money']].map(([key, label]) => `
+          <button type="button" class="debt-network ${flow.network === key ? 'is-on' : ''}" data-pay="network" data-network="${key}">
+            <strong>${label}</strong>
+          </button>`).join('')}
+      </div>
+      <label class="debt-field"><span>Payer phone</span>
+        <input id="payPhoneInput" type="tel" inputmode="tel" placeholder="07…" value="${esc(flow.phone)}" />
+      </label>
+      <div class="debt-sheet-actions">
+        <button class="btn line" type="button" data-pay="back-amount">Back</button>
+        <button class="btn primary" type="button" data-pay="to-summary">Continue</button>
+      </div>
+    </div>`;
+  } else if (flow.step === 'summary') {
+    body = `<div class="debt-step">
+      <h3>Payment summary</h3>
+      <dl class="debt-summary">
+        <div><dt>Outstanding</dt><dd>${esc(moneyTsh(outstanding))}</dd></div>
+        <div><dt>Paying now</dt><dd>${esc(moneyTsh(amount))}</dd></div>
+        <div><dt>Remaining after</dt><dd>${esc(moneyTsh(Math.max(0, outstanding - amount)))}</dd></div>
+        <div><dt>Method</dt><dd>${esc(payNetworkLabel(flow.network))}</dd></div>
+        <div><dt>Phone</dt><dd>${esc(flow.phone || '—')}</dd></div>
+      </dl>
+      <p class="muted debt-note">Debt drops only after TrivaPesa confirms success. Duplicate pushes are blocked while a payment is in flight.</p>
+      <div class="debt-sheet-actions">
+        <button class="btn line" type="button" data-pay="back-method" ${busy ? 'disabled' : ''}>Back</button>
+        <button class="btn primary" type="button" data-pay="confirm" ${busy || amount < 100 ? 'disabled' : ''}>${busy ? 'Sending…' : 'Confirm &amp; Pay'}</button>
+      </div>
+    </div>`;
+  } else if (flow.step === 'confirm') {
+    body = `<div class="debt-step debt-wait">
+      <div class="debt-spinner" aria-hidden="true"></div>
+      <h3>Waiting for confirmation</h3>
+      <p>${esc(flow.message || 'Approve the USSD prompt on your phone.')}</p>
+      <p class="muted">Reference ${esc(flow.orderId || '—')} · ${esc(moneyTsh(amount))}</p>
+      <div class="debt-sheet-actions">
+        <button class="btn line" type="button" data-pay="verify" ${busy ? 'disabled' : ''}>Check status</button>
+        <button class="btn line" type="button" data-pay="close">Close</button>
+      </div>
+    </div>`;
+  } else {
+    const ok = String(flow.status || '').toLowerCase() === 'completed';
+    body = `<div class="debt-step debt-result ${ok ? 'is-ok' : 'is-bad'}">
+      <p class="debt-result-kicker">${ok ? 'Payment successful' : 'Payment failed'}</p>
+      <h3>${esc(moneyTsh(amount))}</h3>
+      <p>${esc(flow.message || (ok ? 'Outstanding balance updated.' : 'No charge was kept. Try again.'))}</p>
+      <dl class="debt-summary">
+        <div><dt>Transaction</dt><dd>${esc(flow.orderId || '—')}</dd></div>
+        <div><dt>Provider ref</dt><dd>${esc(flow.reference || '—')}</dd></div>
+        <div><dt>Method</dt><dd>${esc(payNetworkLabel(flow.network))}</dd></div>
+        <div><dt>New outstanding</dt><dd>${esc(moneyTsh(outstanding))}</dd></div>
+      </dl>
+      <div class="debt-sheet-actions">
+        ${ok ? `<button class="btn line" type="button" data-pay="receipt" data-id="${esc(flow.orderId || '')}">Print receipt</button>` : `<button class="btn primary" type="button" data-pay="retry">Try again</button>`}
+        <button class="btn ${ok ? 'primary' : 'line'}" type="button" data-pay="close">Done</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="debt-sheet" role="dialog" aria-modal="true" aria-label="Settle debt">
+    <button class="debt-sheet-backdrop" type="button" data-pay="close" aria-label="Close"></button>
+    <div class="debt-sheet-card">
+      <div class="debt-sheet-top">
+        <p class="lp-kicker">Settle debt</p>
+        <button class="debt-sheet-x" type="button" data-pay="close" aria-label="Close">×</button>
+      </div>
+      <div class="debt-progress">${progress}</div>
+      ${body}
     </div>
-    ${list(unpaid, 'Hakuna deni haijalipwa.')}
-    ${settled.length ? `<div class="section-gap"></div>${list(settled, '')}` : ''}`;
+  </div>`;
+}
+
+function debtBreakdownTable(snap) {
+  const unpaid = snap.unpaidOrders;
+  const paid = snap.rows.filter((row) => row.fee > 0 && row.outstanding <= 0);
+  const show = [...unpaid, ...paid].slice(0, 80);
+  if (!show.length) return '<p class="empty">No completed orders with Haul commission yet.</p>';
+  return `<div class="table-wrap"><table class="ops-table debt-table">
+    <thead><tr><th>Order ID</th><th>Thamani</th><th>Haul commission</th><th>Paid</th><th>Remaining</th><th>Status</th></tr></thead>
+    <tbody>${show.map((row) => {
+      const id = row.item.orderNumber || row.item.id;
+      const rate = Number(row.item.haulFeeRate);
+      const rateLabel = Number.isFinite(rate) && rate > 0 ? ` · ${Math.round(rate * 100)}%` : '';
+      const chip = row.outstanding > 0
+        ? '<span class="debt-chip wait">Unpaid</span>'
+        : (row.fee > 0 ? '<span class="debt-chip ok">Settled</span>' : '<span class="debt-chip">No fee</span>');
+      return `<tr>
+        <td><a href="#/assignment/${esc(row.item.id)}">${esc(id)}</a></td>
+        <td>${row.thamani ? esc(moneyTsh(row.thamani)) : '—'}</td>
+        <td>${esc(moneyTsh(row.fee))}<span class="debt-rate">${esc(rateLabel)}</span></td>
+        <td>${esc(moneyTsh(row.paid))}</td>
+        <td>${esc(moneyTsh(row.outstanding))}</td>
+        <td>${chip}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+function paymentHistoryTable() {
+  const rows = [...(state.commissionPayments || [])].sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+  if (!rows.length) return '<p class="empty">No settlement payments yet.</p>';
+  return `<div class="table-wrap"><table class="ops-table debt-table">
+    <thead><tr><th>Date</th><th>Amount</th><th>Reference</th><th>Status</th><th></th></tr></thead>
+    <tbody>${rows.map((row) => {
+      const whenLabel = row.at ? new Date(row.at).toLocaleString('en-TZ', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+      const ref = row.reference || row.id || '—';
+      const canReceipt = String(row.status || '').toLowerCase() === 'completed';
+      return `<tr>
+        <td>${esc(whenLabel)}</td>
+        <td>${esc(moneyTsh(row.amountTzs))}</td>
+        <td><code class="debt-ref">${esc(ref)}</code></td>
+        <td>${payStatusChip(row.status)}</td>
+        <td>${canReceipt ? `<button class="btn line small" type="button" data-pay="receipt" data-id="${esc(row.id || '')}">Receipt</button>` : '—'}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+function paymentsPage() {
+  const snap = debtSnapshot();
+  const pending = state.carrier?.commissionPayment;
+  const pendingOpen = String(pending?.status || '').toLowerCase() === 'pending';
+  return `<section class="debt-hero">
+      <div class="debt-hero-copy">
+        <p class="debt-eyebrow">Outstanding Balance</p>
+        <h1 class="debt-amount">${esc(moneyTsh(snap.outstanding))}</h1>
+        <p class="debt-lede">Haul commission owed on completed cargo. Balances update only after a verified payment.</p>
+        <div class="debt-meta">
+          <div><span>Total debt accumulated</span><strong>${esc(moneyTsh(snap.totalDebt))}</strong></div>
+          <div><span>Already paid</span><strong>${esc(moneyTsh(snap.totalPaid))}</strong></div>
+          <div><span>Unpaid orders</span><strong>${snap.unpaidOrders.length}</strong></div>
+        </div>
+        <div class="debt-hero-actions">
+          <button class="btn debt-pay-btn" type="button" data-pay="open" ${snap.outstanding < 100 ? 'disabled' : ''}>Pay Now</button>
+          ${pendingOpen ? `<button class="btn line" type="button" data-pay="resume">Resume pending payment</button>` : ''}
+        </div>
+        ${snap.outstanding < 100 ? '<p class="muted debt-zero">No outstanding Haul commission right now.</p>' : ''}
+      </div>
+    </section>
+    <section class="panel debt-panel">
+      <div class="section-head"><h2>Debt breakdown</h2><p class="muted">Order ID · Thamani · Haul commission · paid · remaining</p></div>
+      ${debtBreakdownTable(snap)}
+    </section>
+    <section class="panel debt-panel">
+      <div class="section-head"><h2>Payment history</h2><p class="muted">Verified settlements via M-Pesa, Mixx, or Airtel (TrivaPesa).</p></div>
+      ${paymentHistoryTable()}
+    </section>
+    ${payFlowSheet(snap)}`;
+}
+
+async function refreshFinanceSnapshot(force = false) {
+  if (!state.user || !state.carrier?.id) return null;
+  const fresh = Date.now() - (state.financeSnapshotAt || 0) < 15000;
+  if (!force && fresh && state.financeSnapshot) return state.financeSnapshot;
+  try {
+    const payload = await portalCall('/carrier/portal/finance');
+    state.financeSnapshot = payload;
+    state.financeSnapshotAt = Date.now();
+    state.commissionPayments = Array.isArray(payload.payments) ? payload.payments : [];
+    return payload;
+  } catch (error) {
+    console.warn('finance snapshot failed', error?.message || error);
+    return state.financeSnapshot;
+  }
+}
+
+function printPaymentReceipt(paymentId) {
+  const id = String(paymentId || '').trim();
+  const snap = debtSnapshot();
+  const row = (state.commissionPayments || []).find((item) => item.id === id)
+    || (state.payFlow?.orderId === id ? {
+      id,
+      amountTzs: state.payFlow.amount,
+      status: state.payFlow.status || 'completed',
+      reference: state.payFlow.reference || id,
+      at: Date.now(),
+      network: state.payFlow.network,
+    } : null);
+  if (!row) {
+    showToast('Receipt not found.');
+    return;
+  }
+  const whenLabel = row.at ? new Date(row.at).toLocaleString('en-TZ') : new Date().toLocaleString('en-TZ');
+  const company = state.carrier?.tradingName || state.carrier?.companyName || state.carrier?.name || 'Carrier';
+  const html = `<!doctype html><html><head><meta charset="utf-8"/><title>HAUL Receipt ${esc(row.id || '')}</title>
+    <style>
+      body{font-family:Figtree,system-ui,sans-serif;color:#111;margin:40px;max-width:560px}
+      h1{font:800 28px/1 Syne,sans-serif;margin:0 0 4px;letter-spacing:-.03em}
+      .kicker{color:#6b6b66;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+      .amount{font:800 40px/1 Syne,sans-serif;margin:24px 0 8px}
+      dl{display:grid;gap:10px;margin:28px 0}
+      div{display:flex;justify-content:space-between;gap:16px;border-bottom:1px solid #eee;padding-bottom:8px}
+      dt{color:#6b6b66} dd{margin:0;font-weight:650}
+      .mark{display:inline-block;background:#f5e000;padding:4px 10px;border-radius:999px;font-weight:700;font-size:12px}
+      @media print{button{display:none}}
+    </style></head><body>
+    <p class="kicker">HAUL · Commission settlement</p>
+    <h1>${esc(company)}</h1>
+    <span class="mark">${esc(String(row.status || 'completed').toUpperCase())}</span>
+    <p class="amount">${esc(moneyTsh(row.amountTzs))}</p>
+    <dl>
+      <div><dt>Transaction</dt><dd>${esc(row.id || '—')}</dd></div>
+      <div><dt>Provider reference</dt><dd>${esc(row.reference || '—')}</dd></div>
+      <div><dt>Date</dt><dd>${esc(whenLabel)}</dd></div>
+      <div><dt>Method</dt><dd>${esc(payNetworkLabel(row.network || state.payFlow?.network))}</dd></div>
+      <div><dt>Outstanding after</dt><dd>${esc(moneyTsh(snap.outstanding))}</dd></div>
+    </dl>
+    <p class="kicker">Generated from Haul Transporter Portal</p>
+    <button onclick="window.print()">Print</button>
+    <script>window.print()</script>
+    </body></html>`;
+  const win = window.open('', '_blank', 'noopener,width=640,height=800');
+  if (!win) {
+    showToast('Allow pop-ups to print the receipt.');
+    return;
+  }
+  win.document.write(html);
+  win.document.close();
+}
+
+async function initiateDebtPayment() {
+  const flow = state.payFlow;
+  if (!flow || state.payBusy) return;
+  const snap = debtSnapshot();
+  const amount = Math.round(Number(flow.amount) || 0);
+  const phone = String(flow.phone || '').trim();
+  const network = String(flow.network || '').trim().toLowerCase();
+  if (amount < 100) throw new Error('Minimum payment is TSh 100.');
+  if (amount > snap.outstanding) throw new Error('Amount cannot exceed outstanding balance.');
+  if (!phone) throw new Error('Enter the payer phone number.');
+  state.payBusy = true;
+  render();
+  try {
+    const token = await state.user.getIdToken();
+    const response = await fetch(`${apiBase()}/carrier/commission/ussd`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, phoneNumber: phone, network }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'USSD was not sent. Try again.');
+    flow.orderId = payload.orderId || '';
+    flow.reference = payload.trivapesaReference || payload.reference || flow.orderId;
+    flow.message = payload.message || 'Approve the USSD prompt on your phone.';
+    flow.amount = Math.round(Number(payload.amount) || amount);
+    if (state.carrier) {
+      state.carrier = {
+        ...state.carrier,
+        commissionPayerPhone: phone,
+        commissionPayment: {
+          orderId: flow.orderId,
+          status: payload.status === 'completed' ? 'completed' : 'pending',
+          amount: flow.amount,
+          network,
+          payerPhone: phone,
+          createdAtMs: Date.now(),
+        },
+      };
+    }
+    if (payload.status === 'completed' && payload.settled) {
+      flow.step = 'result';
+      flow.status = 'completed';
+      flow.message = 'Commission payment confirmed.';
+      state.payBusy = false;
+      await refreshFinanceSnapshot(true);
+      render();
+      return;
+    }
+    flow.step = 'confirm';
+    flow.status = 'pending';
+    state.payBusy = false;
+    render();
+    pollDebtPayment(flow.orderId);
+  } catch (error) {
+    state.payBusy = false;
+    flow.step = 'result';
+    flow.status = 'failed';
+    flow.message = error?.message || 'Payment could not start.';
+    render();
+  }
+}
+
+async function verifyDebtPayment(orderId, { quiet = false } = {}) {
+  const id = String(orderId || state.payFlow?.orderId || '').trim();
+  if (!id) return null;
+  if (!quiet) state.payBusy = true;
+  try {
+    const token = await state.user.getIdToken();
+    const response = await fetch(`${apiBase()}/carrier/commission/verify`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: id }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Could not verify payment.');
+    if (state.payFlow) {
+      state.payFlow.orderId = payload.orderId || id;
+      state.payFlow.message = payload.message || state.payFlow.message;
+      if (payload.status === 'completed' || payload.settled) {
+        state.payFlow.step = 'result';
+        state.payFlow.status = 'completed';
+        state.payFlow.message = 'Commission payment confirmed.';
+        state.payFlow.reference = payload.reference || state.payFlow.reference || id;
+        if (state.carrier?.commissionPayment) {
+          state.carrier = {
+            ...state.carrier,
+            commissionPayment: { ...state.carrier.commissionPayment, status: 'completed', orderId: id },
+          };
+        }
+        await refreshFinanceSnapshot(true);
+      } else if (payload.status === 'failed') {
+        state.payFlow.step = 'result';
+        state.payFlow.status = 'failed';
+        state.payFlow.message = payload.message || 'Payment was not completed.';
+        if (state.carrier?.commissionPayment) {
+          state.carrier = {
+            ...state.carrier,
+            commissionPayment: { ...state.carrier.commissionPayment, status: 'failed', orderId: id },
+          };
+        }
+      } else {
+        state.payFlow.step = 'confirm';
+        state.payFlow.status = 'pending';
+      }
+    }
+    return payload;
+  } finally {
+    state.payBusy = false;
+    render();
+  }
+}
+
+let debtPollTimer = null;
+function pollDebtPayment(orderId) {
+  if (debtPollTimer) clearInterval(debtPollTimer);
+  let ticks = 0;
+  debtPollTimer = setInterval(async () => {
+    ticks += 1;
+    if (!state.payFlow || state.payFlow.step === 'result' || ticks > 30) {
+      clearInterval(debtPollTimer);
+      debtPollTimer = null;
+      return;
+    }
+    try {
+      const payload = await verifyDebtPayment(orderId, { quiet: true });
+      if (payload && (payload.status === 'completed' || payload.settled || payload.status === 'failed')) {
+        clearInterval(debtPollTimer);
+        debtPollTimer = null;
+      }
+    } catch {
+      /* keep polling */
+    }
+  }, 3000);
+}
+
+async function handleDebtPayClick(event) {
+  const btn = event.target.closest('[data-pay]');
+  if (!btn) return false;
+  const act = btn.dataset.pay;
+  const snap = debtSnapshot();
+  if (act === 'open') {
+    openPayFlow({ amount: snap.outstanding, mode: 'full' });
+    return true;
+  }
+  if (act === 'resume') {
+    const pending = state.carrier?.commissionPayment || {};
+    openPayFlow({
+      step: 'confirm',
+      amount: Math.round(Number(pending.amount) || snap.outstanding),
+      phone: pending.payerPhone || state.carrier?.commissionPayerPhone || '',
+      network: pending.network || 'mpesa',
+      orderId: pending.orderId || '',
+      status: 'pending',
+      message: 'Approve the USSD prompt on your phone.',
+    });
+    if (pending.orderId) pollDebtPayment(pending.orderId);
+    return true;
+  }
+  if (act === 'close') {
+    if (debtPollTimer) {
+      clearInterval(debtPollTimer);
+      debtPollTimer = null;
+    }
+    closePayFlow();
+    return true;
+  }
+  if (act === 'mode') {
+    if (!state.payFlow) return true;
+    state.payFlow.mode = btn.dataset.mode === 'partial' ? 'partial' : 'full';
+    if (state.payFlow.mode === 'full') state.payFlow.amount = snap.outstanding;
+    render();
+    return true;
+  }
+  if (act === 'network') {
+    if (!state.payFlow) return true;
+    state.payFlow.network = btn.dataset.network || 'mpesa';
+    render();
+    return true;
+  }
+  if (act === 'to-method') {
+    if (!state.payFlow) return true;
+    if (state.payFlow.mode === 'partial') {
+      const input = document.getElementById('payAmountInput');
+      const value = Math.round(Number(input?.value) || 0);
+      if (value < 100) {
+        showToast('Minimum payment is TSh 100.');
+        return true;
+      }
+      if (value > snap.outstanding) {
+        showToast('Amount cannot exceed outstanding balance.');
+        return true;
+      }
+      state.payFlow.amount = value;
+    } else {
+      state.payFlow.amount = snap.outstanding;
+    }
+    state.payFlow.step = 'method';
+    render();
+    return true;
+  }
+  if (act === 'back-amount') {
+    if (!state.payFlow) return true;
+    const phone = document.getElementById('payPhoneInput');
+    if (phone) state.payFlow.phone = phone.value.trim();
+    state.payFlow.step = 'amount';
+    render();
+    return true;
+  }
+  if (act === 'to-summary') {
+    if (!state.payFlow) return true;
+    const phone = document.getElementById('payPhoneInput');
+    state.payFlow.phone = String(phone?.value || state.payFlow.phone || '').trim();
+    if (!state.payFlow.phone) {
+      showToast('Enter the payer phone number.');
+      return true;
+    }
+    state.payFlow.step = 'summary';
+    render();
+    return true;
+  }
+  if (act === 'back-method') {
+    if (!state.payFlow) return true;
+    state.payFlow.step = 'method';
+    render();
+    return true;
+  }
+  if (act === 'confirm') {
+    try {
+      await initiateDebtPayment();
+    } catch (error) {
+      showToast(error?.message || 'Payment failed.');
+    }
+    return true;
+  }
+  if (act === 'verify') {
+    try {
+      await verifyDebtPayment(state.payFlow?.orderId);
+    } catch (error) {
+      showToast(error?.message || 'Could not verify payment.');
+    }
+    return true;
+  }
+  if (act === 'retry') {
+    openPayFlow({ amount: snap.outstanding, mode: 'full' });
+    return true;
+  }
+  if (act === 'receipt') {
+    printPaymentReceipt(btn.dataset.id || state.payFlow?.orderId);
+    return true;
+  }
+  return true;
 }
 
 function cashTableEnglish(rows) {
@@ -4020,6 +4575,7 @@ async function render() {
     routes: 'Routes',
     fares: 'Fares',
     payments: 'Payments',
+    fedha: 'Payments',
     receipts: 'Receipts',
     customers: 'Customers',
     reports: 'Reports',
@@ -4031,7 +4587,7 @@ async function render() {
   };
   $('pageTitle').textContent = titles[page] || 'Dashboard';
   const viewEl = $('view');
-  viewEl.classList.toggle('wide', ['fares', 'payments', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment'].includes(page));
+  viewEl.classList.toggle('wide', ['fares', 'payments', 'fedha', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment'].includes(page));
   const rows = state.shipments.filter(mine);
   let html = '';
   if (!state.carrier && !state.isAdmin && page !== 'desk' && page !== 'uthibitisho') {
@@ -4043,13 +4599,13 @@ async function render() {
   else if (page === 'history' || page === 'mine' || page === 'manifest' || page === 'mizigo' || page === 'completed' || page === 'historia') html = historyPage();
   else if (page === 'transit') html = transitOrdersPage();
   else if (page === 'drivers' || page === 'trips' || page === 'vehicles') html = driversPage();
-  else if (page === 'finance' || page === 'payments' || page === 'fares' || page === 'reports') html = financePage();
+  else if (page === 'payments' || page === 'fedha') html = paymentsPage();
+  else if (page === 'finance' || page === 'fares' || page === 'reports') html = financePage();
   else if (page === 'levels') html = levelsPage();
   else if (page === 'notifications') html = companyPages();
   else if (page === 'profile' || page === 'verification' || page === 'staff') html = companyPages();
   else if (page === 'routes') html = routesPage();
   else if (page === 'fares') html = faresPage();
-  else if (page === 'payments' || page === 'fedha') html = paymentsPage();
   else if (page === 'receipts') html = receiptsPage();
   else if (page === 'customers') html = customersPage();
   else if (page === 'reports') html = reportsPage();
@@ -4059,6 +4615,12 @@ async function render() {
   else if (['profile', 'verification', 'staff', 'notifications'].includes(page)) html = companyPages();
   else html = dashboard();
   viewEl.innerHTML = html;
+  if ((page === 'payments' || page === 'fedha') && !state.payFlow) {
+    refreshFinanceSnapshot().then((payload) => {
+      if (!payload || state.payFlow) return;
+      if (route().page === 'payments' || route().page === 'fedha') render();
+    }).catch(() => null);
+  }
   if (viewEl.querySelector('[data-unquoted-since], [data-offer-until]')) startCountdownTicker();
   if (page === 'profile') {
     const all = document.getElementById('profileCoverageAll');
@@ -4230,6 +4792,7 @@ async function requireCarrier() {
 }
 
 async function onViewClick(event) {
+  if (await handleDebtPayClick(event)) return;
   const photoBtn = event.target.closest('[data-photo]');
   if (photoBtn) {
     const box = document.getElementById('photoLightbox');
@@ -4775,35 +5338,6 @@ async function onViewSubmit(event) {
       assignedDriverPhone: driver.phone,
       driverDispatchedAt: serverTimestamp(),
     });
-  }
-  if (form.id === 'commissionForm') {
-    const amount = Math.round(Number(data.get('amount')) || 0);
-    const phone = String(data.get('phone') || '').trim();
-    const network = String(data.get('network') || '').trim();
-    const token = await state.user.getIdToken();
-    const base = (globalThis.DOORDROP_ADMIN_CONFIG?.apiBaseUrl || 'https://us-central1-efootball-app-9d175.cloudfunctions.net/api').replace(/\/+$/, '');
-    const response = await fetch(`${base}/carrier/commission/ussd`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount, phoneNumber: phone, network }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || 'USSD was not sent. Try again.');
-    const note = document.getElementById('payNote');
-    if (note) note.textContent = payload.message || 'Check the phone for the USSD prompt.';
-    const orderId = payload.orderId;
-    if (orderId) {
-      setTimeout(async () => {
-        const verify = await fetch(`${base}/carrier/commission/verify`, {
-          method: 'POST',
-          headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId }),
-        });
-        const verified = await verify.json().catch(() => ({}));
-        if (note && verified.message) note.textContent = verified.message;
-        else if (note && verified.status === 'completed') note.textContent = 'Commission payment confirmed.';
-      }, 8000);
-    }
   }
   if (form.id === 'vehicleForm') {
     const id = await requireCarrier();
