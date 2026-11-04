@@ -3675,6 +3675,37 @@ function payStatusChip(status) {
   return `<span class="debt-chip">${esc(status || 'Unknown')}</span>`;
 }
 
+/** Honest Swahili outcome copy from verify/USSD payload — never invent a decline reason. */
+function mapPayOutcomeMessage(payload = {}, fallback = '') {
+  const status = String(payload.status || payload.providerStatus || '').trim();
+  const upper = status.toUpperCase();
+  const detail = String(
+    payload.message || payload.error || payload.failureReason || fallback || ''
+  ).replace(/\s+/g, ' ').trim();
+  const haystack = `${status} ${detail}`;
+  if (/insufficient|salio|low.?balance|no.?balance|balance.?too.?low/i.test(haystack)) {
+    return 'Salio halitoshi.';
+  }
+  if (['EXPIRED', 'TIMEOUT'].includes(upper) || /\bexpired\b|\btimeout\b|muda umeisha/i.test(haystack)) {
+    return 'Muda umeisha, jaribu tena.';
+  }
+  if (['CANCELLED', 'CANCELED', 'REJECTED'].includes(upper) || /\bcancel|\breject/i.test(haystack)) {
+    return 'Malipo yameshindikana.';
+  }
+  if (detail) return detail;
+  if (['FAILED', 'FAILURE'].includes(upper) || String(payload.status || '').toLowerCase() === 'failed') {
+    return 'Malipo yameshindikana.';
+  }
+  return fallback || 'Malipo yameshindikana.';
+}
+
+function payWaitHint(flow) {
+  const ticks = Math.max(0, Number(flow?.pollTicks) || 0);
+  if (ticks >= 20) return 'Bado tunasubiri uthibitisho kutoka TrivaPesa…';
+  if (ticks >= 8) return 'Thibitisha USSD kwenye simu yako, kisha subiri.';
+  return 'Subiri uthibitisho kwenye simu.';
+}
+
 function openPayFlow(seed = {}) {
   const snap = debtSnapshot();
   const outstanding = Math.max(0, Math.round(Number(seed.amount ?? snap.outstanding) || 0));
@@ -3766,31 +3797,45 @@ function payFlowSheet(snap) {
       </div>
     </div>`;
   } else if (flow.step === 'confirm') {
-    body = `<div class="debt-step debt-wait">
-      <div class="debt-spinner" aria-hidden="true"></div>
-      <h3>Waiting for confirmation</h3>
-      <p>${esc(flow.message || 'Approve the USSD prompt on your phone.')}</p>
-      <p class="muted">Reference ${esc(flow.orderId || '—')} · ${esc(moneyTsh(amount))}</p>
+    body = `<div class="debt-step debt-wait" aria-live="polite">
+      <div class="debt-wait-orb" aria-hidden="true">
+        <div class="debt-spinner"></div>
+      </div>
+      <p class="debt-result-kicker debt-wait-kicker">Inasubiri uthibitisho</p>
+      <h3>Subiri uthibitisho</h3>
+      <p class="debt-wait-status">${esc(flow.message || payWaitHint(flow))}</p>
+      <p class="muted debt-wait-copy">Thibitisha USSD (${esc(payNetworkLabel(flow.network))}) kwenye simu <strong>${esc(flow.phone || '—')}</strong>. Tutakujulisha mara tu malipo yakamilika au yakishindikana.</p>
+      <dl class="debt-summary">
+        <div><dt>Kiasi</dt><dd>${esc(moneyTsh(amount))}</dd></div>
+        <div><dt>Kumbukumbu</dt><dd>${esc(flow.orderId || '—')}</dd></div>
+        <div><dt>Hali</dt><dd><span class="debt-chip wait">Pending</span></dd></div>
+      </dl>
       <div class="debt-sheet-actions">
-        <button class="btn line" type="button" data-pay="verify" ${busy ? 'disabled' : ''}>Check status</button>
-        <button class="btn line" type="button" data-pay="close">Close</button>
+        <button class="btn line" type="button" data-pay="verify" ${busy ? 'disabled' : ''}>${busy ? 'Inakagua…' : 'Angalia hali'}</button>
+        <button class="btn line" type="button" data-pay="close">Funga</button>
       </div>
     </div>`;
   } else {
     const ok = String(flow.status || '').toLowerCase() === 'completed';
-    body = `<div class="debt-step debt-result ${ok ? 'is-ok' : 'is-bad'}">
-      <p class="debt-result-kicker">${ok ? 'Payment successful' : 'Payment failed'}</p>
+    const failMsg = flow.message || 'Malipo yameshindikana.';
+    body = `<div class="debt-step debt-result ${ok ? 'is-ok' : 'is-bad'}" aria-live="assertive">
+      <div class="debt-result-mark" aria-hidden="true">${ok ? '✓' : '!'}</div>
+      <p class="debt-result-kicker">${ok ? 'Malipo yamefanikiwa' : 'Malipo hayajakamilika'}</p>
       <h3>${esc(moneyTsh(amount))}</h3>
-      <p>${esc(flow.message || (ok ? 'Outstanding balance updated.' : 'No charge was kept. Try again.'))}</p>
+      <p class="debt-result-msg">${esc(ok
+        ? (flow.message || 'Commission imethibitishwa. Deni limesasishwa.')
+        : failMsg)}</p>
       <dl class="debt-summary">
-        <div><dt>Transaction</dt><dd>${esc(flow.orderId || '—')}</dd></div>
-        <div><dt>Provider ref</dt><dd>${esc(flow.reference || '—')}</dd></div>
-        <div><dt>Method</dt><dd>${esc(payNetworkLabel(flow.network))}</dd></div>
-        <div><dt>New outstanding</dt><dd>${esc(moneyTsh(outstanding))}</dd></div>
+        <div><dt>Muamala</dt><dd>${esc(flow.orderId || '—')}</dd></div>
+        <div><dt>Rejea ya mtoa huduma</dt><dd>${esc(flow.reference || (ok ? flow.orderId : '—') || '—')}</dd></div>
+        <div><dt>Njia</dt><dd>${esc(payNetworkLabel(flow.network))}</dd></div>
+        <div><dt>Deni jipya</dt><dd>${esc(moneyTsh(outstanding))}</dd></div>
       </dl>
       <div class="debt-sheet-actions">
-        ${ok ? `<button class="btn line" type="button" data-pay="receipt" data-id="${esc(flow.orderId || '')}">Print receipt</button>` : `<button class="btn primary" type="button" data-pay="retry">Try again</button>`}
-        <button class="btn ${ok ? 'primary' : 'line'}" type="button" data-pay="close">Done</button>
+        ${ok
+          ? `<button class="btn line" type="button" data-pay="receipt" data-id="${esc(flow.orderId || '')}">Chapisha risiti</button>`
+          : `<button class="btn primary" type="button" data-pay="retry">Jaribu tena</button>`}
+        <button class="btn ${ok ? 'primary' : 'line'}" type="button" data-pay="close">${ok ? 'Maliza' : 'Funga'}</button>
       </div>
     </div>`;
   }
@@ -3975,11 +4020,16 @@ async function initiateDebtPayment() {
       body: JSON.stringify({ amount, phoneNumber: phone, network }),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || 'USSD was not sent. Try again.');
+    if (!response.ok) {
+      throw Object.assign(new Error(payload.error || payload.message || 'USSD haijatumwa. Jaribu tena.'), {
+        payload,
+      });
+    }
     flow.orderId = payload.orderId || '';
     flow.reference = payload.trivapesaReference || payload.reference || flow.orderId;
-    flow.message = payload.message || 'Approve the USSD prompt on your phone.';
+    flow.message = payload.message || 'Subiri uthibitisho kwenye simu.';
     flow.amount = Math.round(Number(payload.amount) || amount);
+    flow.pollTicks = 0;
     if (state.carrier) {
       state.carrier = {
         ...state.carrier,
@@ -3997,9 +4047,18 @@ async function initiateDebtPayment() {
     if (payload.status === 'completed' && payload.settled) {
       flow.step = 'result';
       flow.status = 'completed';
-      flow.message = 'Commission payment confirmed.';
+      flow.message = 'Malipo yamefanikiwa. Commission imethibitishwa.';
+      flow.reference = payload.reference || flow.reference || flow.orderId;
       state.payBusy = false;
       await refreshFinanceSnapshot(true);
+      render();
+      return;
+    }
+    if (payload.status === 'failed') {
+      flow.step = 'result';
+      flow.status = 'failed';
+      flow.message = mapPayOutcomeMessage(payload, 'Malipo yameshindikana.');
+      state.payBusy = false;
       render();
       return;
     }
@@ -4012,7 +4071,10 @@ async function initiateDebtPayment() {
     state.payBusy = false;
     flow.step = 'result';
     flow.status = 'failed';
-    flow.message = error?.message || 'Payment could not start.';
+    flow.message = mapPayOutcomeMessage(
+      error?.payload || { message: error?.message, error: error?.message },
+      error?.message || 'Malipo yameshindikana.'
+    );
     render();
   }
 }
@@ -4029,14 +4091,15 @@ async function verifyDebtPayment(orderId, { quiet = false } = {}) {
       body: JSON.stringify({ orderId: id }),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || 'Could not verify payment.');
+    if (!response.ok) throw new Error(payload.error || payload.message || 'Imeshindikana kukagua malipo.');
     if (state.payFlow) {
       state.payFlow.orderId = payload.orderId || id;
-      state.payFlow.message = payload.message || state.payFlow.message;
+      if (payload.reference) state.payFlow.reference = payload.reference;
+      if (payload.providerStatus) state.payFlow.providerStatus = payload.providerStatus;
       if (payload.status === 'completed' || payload.settled) {
         state.payFlow.step = 'result';
         state.payFlow.status = 'completed';
-        state.payFlow.message = 'Commission payment confirmed.';
+        state.payFlow.message = 'Malipo yamefanikiwa. Commission imethibitishwa.';
         state.payFlow.reference = payload.reference || state.payFlow.reference || id;
         if (state.carrier?.commissionPayment) {
           state.carrier = {
@@ -4048,7 +4111,7 @@ async function verifyDebtPayment(orderId, { quiet = false } = {}) {
       } else if (payload.status === 'failed') {
         state.payFlow.step = 'result';
         state.payFlow.status = 'failed';
-        state.payFlow.message = payload.message || 'Payment was not completed.';
+        state.payFlow.message = mapPayOutcomeMessage(payload, 'Malipo yameshindikana.');
         if (state.carrier?.commissionPayment) {
           state.carrier = {
             ...state.carrier,
@@ -4058,6 +4121,7 @@ async function verifyDebtPayment(orderId, { quiet = false } = {}) {
       } else {
         state.payFlow.step = 'confirm';
         state.payFlow.status = 'pending';
+        state.payFlow.message = payload.message || payWaitHint(state.payFlow);
       }
     }
     return payload;
@@ -4071,12 +4135,28 @@ let debtPollTimer = null;
 function pollDebtPayment(orderId) {
   if (debtPollTimer) clearInterval(debtPollTimer);
   let ticks = 0;
+  if (state.payFlow) state.payFlow.pollTicks = 0;
   debtPollTimer = setInterval(async () => {
     ticks += 1;
-    if (!state.payFlow || state.payFlow.step === 'result' || ticks > 30) {
+    if (!state.payFlow || state.payFlow.step === 'result') {
       clearInterval(debtPollTimer);
       debtPollTimer = null;
       return;
+    }
+    if (ticks > 30) {
+      clearInterval(debtPollTimer);
+      debtPollTimer = null;
+      if (state.payFlow && state.payFlow.step !== 'result') {
+        state.payFlow.step = 'result';
+        state.payFlow.status = 'failed';
+        state.payFlow.message = 'Muda umeisha, jaribu tena.';
+        render();
+      }
+      return;
+    }
+    if (state.payFlow) {
+      state.payFlow.pollTicks = ticks;
+      if (state.payFlow.step === 'confirm' && (ticks === 8 || ticks === 20)) render();
     }
     try {
       const payload = await verifyDebtPayment(orderId, { quiet: true });
@@ -4108,7 +4188,7 @@ async function handleDebtPayClick(event) {
       network: pending.network || 'mpesa',
       orderId: pending.orderId || '',
       status: 'pending',
-      message: 'Approve the USSD prompt on your phone.',
+      message: 'Subiri uthibitisho kwenye simu.',
     });
     if (pending.orderId) pollDebtPayment(pending.orderId);
     return true;

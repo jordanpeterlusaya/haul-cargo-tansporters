@@ -3962,6 +3962,21 @@ body:has(#app:not(.hidden)) {
 #app .debt-result { text-align: center; }
 #app .debt-wait .debt-summary,
 #app .debt-result .debt-summary { text-align: left; }
+#app .debt-wait-orb {
+  width: 72px;
+  height: 72px;
+  margin: 4px auto 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 35% 30%, #fffdf0, #f5e000 55%, #e6d200);
+  box-shadow: 0 10px 28px rgba(17, 17, 17, 0.12);
+}
+#app .debt-wait-orb .debt-spinner {
+  margin: 0;
+  border-color: rgba(17, 17, 17, 0.14);
+  border-top-color: #111;
+}
 #app .debt-spinner {
   width: 42px;
   height: 42px;
@@ -3973,6 +3988,43 @@ body:has(#app:not(.hidden)) {
 }
 @keyframes debtSpin {
   to { transform: rotate(360deg); }
+}
+#app .debt-wait-kicker { color: #7a5c00; }
+#app .debt-wait-status {
+  margin: 0 0 10px;
+  font: 650 1.02rem/1.4 var(--font-body);
+  color: #111;
+}
+#app .debt-wait-copy {
+  margin: 0 auto 8px;
+  max-width: 34ch;
+  font-size: 13px;
+  line-height: 1.45;
+}
+#app .debt-result-mark {
+  width: 64px;
+  height: 64px;
+  margin: 2px auto 14px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font: 800 1.6rem/1 var(--font-display);
+}
+#app .debt-result.is-ok .debt-result-mark {
+  background: #e8f7ef;
+  color: #176b42;
+  box-shadow: 0 0 0 8px rgba(23, 107, 66, 0.08);
+  animation: debtPop 320ms var(--ease-out, ease);
+}
+#app .debt-result.is-bad .debt-result-mark {
+  background: #fdecec;
+  color: #8b1e1e;
+  box-shadow: 0 0 0 8px rgba(139, 30, 30, 0.08);
+  animation: debtPop 320ms var(--ease-out, ease);
+}
+@keyframes debtPop {
+  from { transform: scale(0.72); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 #app .debt-result-kicker {
   margin: 0 0 8px;
@@ -3986,6 +4038,13 @@ body:has(#app:not(.hidden)) {
   font: 800 clamp(2rem, 6vw, 2.8rem)/1 var(--font-display);
   letter-spacing: -0.04em;
 }
+#app .debt-result-msg {
+  margin: 8px auto 0;
+  max-width: 36ch;
+  font: 600 1rem/1.45 var(--font-body);
+  color: #2a2a27;
+}
+#app .debt-result.is-bad .debt-result-msg { color: #8b1e1e; }
 @media (max-width: 720px) {
   #app .debt-meta { grid-template-columns: 1fr; }
   #app .debt-mode-grid,
