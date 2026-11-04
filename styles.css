@@ -2459,6 +2459,101 @@ body:has(#app:not(.hidden)) {
   #app .who { border-radius: 10px; height: auto; padding: 6px; }
 }
 
+/* Agents dashboard — core KPIs only */
+#app .dash-home {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  max-width: 1100px;
+}
+#app .dash-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+}
+#app .dash-kpis {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+}
+#app .dash-kpis .metric {
+  padding: 16px 16px 18px;
+  border-right: 1px solid var(--line);
+}
+#app .dash-kpis .metric:last-child { border-right: 0; }
+#app .dash-kpis .metric span {
+  display: block;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+#app .dash-kpis .metric strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 22px;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  line-height: 1.15;
+}
+#app .dash-chart {
+  padding: 18px 18px 16px;
+}
+#app .progress-trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 160px;
+  margin-top: 8px;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--line);
+}
+#app .progress-trend span {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+#app .progress-trend i {
+  display: block;
+  width: 100%;
+  max-width: 28px;
+  margin: 0 auto;
+  background: #111113;
+  border-radius: 4px 4px 0 0;
+  opacity: 0.92;
+}
+#app .progress-trend em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+#app .dash-chart .trend-note { margin-top: 12px; }
+@media (max-width: 960px) {
+  #app .dash-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #app .dash-kpis .metric:nth-child(3n) { border-right: 0; }
+  #app .dash-kpis .metric:nth-child(n+4) { border-top: 1px solid var(--line); }
+}
+@media (max-width: 640px) {
+  #app .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #app .dash-kpis .metric { border-right: 1px solid var(--line); }
+  #app .dash-kpis .metric:nth-child(2n) { border-right: 0; }
+  #app .dash-kpis .metric:nth-child(n+3) { border-top: 1px solid var(--line); }
+  #app .dash-kpis .metric strong { font-size: 18px; }
+  #app .progress-trend { height: 120px; gap: 4px; }
+  #app .progress-trend em { font-size: 9px; }
+}
+
 /* Mute-style orders desk */
 #app .btn.dark {
   background: #111113;

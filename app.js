@@ -1674,26 +1674,72 @@ function photoThumb(item) {
     : '<span class="thumb empty" aria-hidden="true"></span>';
 }
 
+function darDayKey(ms) {
+  if (!ms) return '';
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam' }).format(new Date(ms));
+}
+
+function agentOrderCommission(item) {
+  const explicit = Math.round(Number(item?.haulFee) || 0);
+  if (explicit > 0) return explicit;
+  const fee = priceOf(item);
+  if (fee <= 0) return 0;
+  const rate = Number(companyStanding().feePercent || 12) / 100;
+  return Math.max(0, Math.round(fee * rate));
+}
+
+function dashboardKpis() {
+  const today = darTodayKey();
+  let mapato = 0;
+  let mapatoLeo = 0;
+  let commission = 0;
+  let odaLeo = 0;
+  let completed = 0;
+  deskRows().forEach((item) => {
+    const bucket = orderBucket(item);
+    if (!bucket || bucket === 'cancelled') return;
+    const day = darDayKey(orderClock(item));
+    if (day === today) odaLeo += 1;
+    const owned = bucket === 'verified' || bucket === 'transit' || bucket === 'delivered';
+    const fee = owned ? priceOf(item) : 0;
+    if (fee > 0) {
+      mapato += fee;
+      if (day === today) mapatoLeo += fee;
+    }
+    if (bucket === 'delivered') {
+      completed += 1;
+      commission += agentOrderCommission(item);
+    }
+  });
+  return { mapato, mapatoLeo, commission, odaLeo, completed };
+}
+
 function ordersTrend() {
   const days = [];
   const now = Date.now();
   for (let i = 13; i >= 0; i -= 1) {
     const ms = now - i * 86400000;
-    const key = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam' }).format(new Date(ms));
+    const key = darDayKey(ms);
     days.push({
       key,
       label: new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
       count: 0,
+      revenue: 0,
     });
   }
   const index = new Map(days.map((day) => [day.key, day]));
   let dated = 0;
   deskRows().forEach((item) => {
+    const stage = orderBucket(item);
+    if (!stage || stage === 'cancelled') return;
     const ms = orderClock(item);
     if (!ms) return;
     dated += 1;
-    const bucket = index.get(new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam' }).format(new Date(ms)));
-    if (bucket) bucket.count += 1;
+    const bucket = index.get(darDayKey(ms));
+    if (!bucket) return;
+    bucket.count += 1;
+    const owned = stage === 'verified' || stage === 'transit' || stage === 'delivered';
+    if (owned) bucket.revenue += Math.max(0, priceOf(item));
   });
   return { days, dated };
 }
@@ -1703,81 +1749,46 @@ function metricCell(label, value, tone) {
 }
 
 function dashboard() {
-  const snap = opsSnapshot();
   const company = state.carrier?.companyName || 'Transporter';
-  const attention = attentionItems();
-  const feed = activityFeed();
-  const active = deskRows()
-    .filter((item) => ['verified', 'transit'].includes(orderBucket(item)))
-    .sort((a, b) => orderClock(b) - orderClock(a))
-    .slice(0, 6);
-  const done = deskRows().filter((item) => orderBucket(item) === 'delivered').sort((a, b) => timeMs(b.deliveredAt) - timeMs(a.deliveredAt)).slice(0, 5);
+  const kpis = dashboardKpis();
   const trend = ordersTrend();
-  const maxBar = Math.max(1, ...trend.days.map((day) => day.count));
-  const closed = snap.delivered + snap.cancelled;
-  const completion = closed > 0 ? `${Math.round((snap.delivered / closed) * 100)}%` : '—';
-  const flowTotal = Math.max(1, snap.incoming + snap.verified + snap.transit + snap.delivered);
-  const flow = [
-    ['Mpya', snap.incoming],
-    ['Imepokelewa', snap.verified],
-    ['Njiani', snap.transit],
-    ['Imekabidhiwa', snap.delivered],
-  ];
-  if (snap.incoming) startCountdownTicker();
-  else stopCountdownTicker();
-  const attentionBody = attention.length
-    ? attention.map((item) => `<a class="feed-row" href="#/assignment/${esc(item.id)}">
-        ${photoThumb(item)}
-        <span><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong><em>${esc(item.pickupLabel || item.origin || 'Pickup')} → ${esc(dropOffLabel(item))}</em></span>
-        <b class="attn">${esc(attentionLabel(item))}</b>
-      </a>`).join('')
-    : '<p class="empty">Hakuna oda inayosubiri hatua.</p>';
-  const feedBody = feed.length
-    ? feed.map((event) => `<a class="feed-row slim" href="#/assignment/${esc(event.id)}"><span><strong>${esc(event.ref)}</strong><em>${esc(event.label)}</em></span><time>${esc(event.at || '')}</time></a>`).join('')
-    : '<p class="empty">Hakuna mabadiliko ya status bado.</p>';
-  const activeBody = active.length
-    ? `<div class="table-wrap"><table class="ops-table"><thead><tr><th></th><th>Order</th><th>Route</th><th>Status</th><th>Received</th><th></th></tr></thead><tbody>${active.map((item) => `<tr>
-        <td>${photoThumb(item)}</td>
-        <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong><div class="cell-sub">${esc(item.customerName || '')}</div></td>
-        <td>${esc(item.pickupLabel || item.origin || '—')} → ${esc(dropOffLabel(item))}</td>
-        <td>${stageBadge(item)}</td>
-        <td>${esc(when(item.offeredAt || item.createdAt || item.acceptedAt))}</td>
-        <td class="actions">${stageButton(item)}<a class="btn line small" href="#/assignment/${esc(item.id)}">Open</a></td>
-      </tr>`).join('')}</tbody></table></div>`
-    : '<p class="empty">Hakuna mzigo unaosafirishwa.</p>';
-  return `<header class="ops-head"><div><p class="ops-kicker">${esc(company)}</p><h2>Operations</h2></div><p class="ops-completion"><span>Completion</span><strong>${completion}</strong></p></header>
-  <section class="metric-strip">
-    ${metricCell('Total orders', snap.total)}
-    ${metricCell('Incoming', snap.incoming, snap.incoming ? 'hot' : '')}
-    ${metricCell('Awaiting verification', snap.awaiting, snap.awaiting ? 'hot' : '')}
-    ${metricCell('Verified', snap.verified)}
-    ${metricCell('In transit', snap.transit, snap.transit ? 'live' : '')}
-    ${metricCell('Delivered', snap.delivered)}
-    ${metricCell('Cancelled', snap.cancelled)}
-    ${metricCell('Commission generated', money(snap.generated))}
-    ${metricCell('Outstanding', money(snap.outstanding), snap.outstanding ? 'hot' : '')}
-    ${metricCell('Commission paid', money(snap.paid))}
-  </section>
-  <div class="ops-grid">
-    <section class="panel ops-panel">
-      <div class="section-head"><h2>Lifecycle</h2><a href="#/orders/new">Orders</a></div>
-      <div class="flow">${flow.map(([label, count]) => `<div><span>${label}</span><b>${count}</b><i style="width:${Math.round((count / flowTotal) * 100)}%"></i></div>`).join('')}</div>
-      ${trend.dated ? `<div class="trend" aria-label="Orders over 14 days">${trend.days.map((day) => `<span title="${esc(day.label)} · ${day.count}"><i style="height:${Math.max(4, Math.round((day.count / maxBar) * 100))}%"></i></span>`).join('')}</div><p class="muted trend-note">${trend.dated} orders have a received time in the loaded desk.</p>` : '<p class="empty">Hakuna tarehe za oda za kuchora mwenendo.</p>'}
+  const chartMode = trend.days.some((day) => day.revenue > 0) ? 'revenue' : 'orders';
+  const maxBar = Math.max(1, ...trend.days.map((day) => (chartMode === 'revenue' ? day.revenue : day.count)));
+  return `<section class="dash-home">
+    <header class="ops-head dash-head">
+      <div>
+        <p class="ops-kicker">${esc(company)}</p>
+        <h2>Dashboard</h2>
+      </div>
+      <a class="btn line small" href="#/orders/new">Oda</a>
+    </header>
+    <section class="metric-strip dash-kpis" aria-label="Vipimo muhimu">
+      ${metricCell('Mapato', money(kpis.mapato))}
+      ${metricCell('Mapato ya leo', money(kpis.mapatoLeo), kpis.mapatoLeo ? 'hot' : '')}
+      ${metricCell('Commission', money(kpis.commission))}
+      ${metricCell('Oda za leo', kpis.odaLeo, kpis.odaLeo ? 'live' : '')}
+      ${metricCell('Zilizokamilika', kpis.completed)}
     </section>
-    <section class="panel ops-panel">
-      <div class="section-head"><h2>Needs attention</h2><span class="muted">${attention.length}</span></div>
-      <div class="feed">${attentionBody}</div>
+    <section class="panel dash-chart">
+      <div class="section-head">
+        <h2>Progress ya biashara</h2>
+        <span class="muted">${chartMode === 'revenue' ? 'Mapato · siku 14' : 'Oda · siku 14'}</span>
+      </div>
+      ${trend.dated
+        ? `<div class="trend progress-trend" aria-label="Progress ya biashara">${trend.days.map((day) => {
+            const value = chartMode === 'revenue' ? day.revenue : day.count;
+            const tip = chartMode === 'revenue'
+              ? `${day.label} · ${money(day.revenue)} · ${day.count} oda`
+              : `${day.label} · ${day.count} oda`;
+            const height = Math.max(value > 0 ? 8 : 3, Math.round((value / maxBar) * 100));
+            return `<span title="${esc(tip)}"><i style="height:${height}%"></i><em>${esc(day.label.split(' ')[0])}</em></span>`;
+          }).join('')}</div>
+          <p class="muted trend-note">${chartMode === 'revenue'
+            ? `Jumla ya mapato kwenye chati · ${money(trend.days.reduce((sum, day) => sum + day.revenue, 0))}`
+            : `${trend.dated} oda zilizo na tarehe kwenye desk.`}</p>`
+        : '<p class="empty">Hakuna data ya kuchora progress bado.</p>'}
     </section>
-    <section class="panel ops-panel">
-      <div class="section-head"><h2>Live activity</h2></div>
-      <div class="feed">${feedBody}</div>
-    </section>
-    <section class="panel ops-panel">
-      <div class="section-head"><h2>On the road</h2><a href="#/transit">In transit</a></div>
-      ${activeBody}
-      ${done.length ? `<p class="muted done-note">Latest delivered · ${done.map((item) => esc(item.orderNumber || item.id.slice(0, 8))).join(' · ')}</p>` : ''}
-    </section>
-  </div>`;
+  </section>`;
 }
 
 function ordersTable(rows, showAccept) {
