@@ -33,6 +33,7 @@ import {
 
 const ADMIN_EMAIL = 'boyzeus11@gmail.com';
 const HAUL_FEE_RATE = 0.12;
+const QUOTE_COMMISSION_RATE = 0.15;
 const OFFER_MS = 5 * 60 * 1000;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const FLOW = ['new', 'matching', 'assigned', 'accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus', 'in_transit', 'arrived', 'delivered'];
@@ -121,6 +122,7 @@ const state = {
   needsCompanySetup: false,
   unsubscribers: [],
   editingQuoteId: null,
+  quoteDraftAmount: {},
   deskOpen: '',
   deskPage: 1,
   deskTab: '',
@@ -229,6 +231,11 @@ function stamp() {
 function feeSplit(amount) {
   const haulFee = Math.round((Number(amount) || 0) * HAUL_FEE_RATE);
   return { amount: Number(amount) || 0, haulFee, carrierNet: (Number(amount) || 0) - haulFee };
+}
+function quoteCommission(amount) {
+  const fee = Math.round(Number(amount) || 0);
+  if (fee <= 0) return 0;
+  return Math.round(fee * QUOTE_COMMISSION_RATE);
 }
 function isBusParcel(order) {
   if (!order || order.status === 'cancelled') return false;
@@ -421,8 +428,8 @@ function orderFacts(item) {
     <div><dt>Marudio</dt><dd>${esc(item.destination || item.dropoffLabel || item.routeLabel || '—')}</dd></div>
     <div><dt>Mtumaji</dt><dd>${esc(item.senderName || item.customerName || '—')}</dd></div>
     <div><dt>Mpokeaji</dt><dd>${esc(item.recipientName || '—')}</dd></div>
-    <div><dt>Simu mtumaji</dt><dd>${quotePending(item) ? 'Baada ya mteja kukubali' : phoneLine(item.senderPhone || item.customerPhone)}</dd></div>
-    <div><dt>Simu mpokeaji</dt><dd>${quotePending(item) ? 'Baada ya mteja kukubali' : phoneLine(item.recipientPhone)}</dd></div>
+    <div><dt>Simu mtumaji</dt><dd>${contactsOpen(item) ? phoneLine(item.senderPhone || item.customerPhone) : phoneVisual(item.senderPhone || item.customerPhone, false)}</dd></div>
+    <div><dt>Simu mpokeaji</dt><dd>${contactsOpen(item) ? phoneLine(item.recipientPhone) : phoneVisual(item.recipientPhone, false)}</dd></div>
     <div><dt>Thamani ya bidhaa</dt><dd>${value ? esc(money(value)) : 'Haijatajwa'}</dd></div>
     <div><dt>Bei ya usafirishaji</dt><dd>${shippingFee > 0 ? money(shippingFee) : 'Bado haijawekwa'}</dd></div>
     <div><dt>Safari</dt><dd>${esc(schedule || '—')}</dd></div>
@@ -2108,58 +2115,104 @@ function needsCustomerPrice(item) {
   return qs !== 'confirmed' || priceOf(item) <= 0;
 }
 
+function uiIcon(name) {
+  const paths = {
+    pin: '<path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.2"/>',
+    truck: '<path d="M3 16V8h11v8"/><path d="M14 11h4l3 3v2h-7"/><circle cx="7.5" cy="18" r="1.4"/><circle cx="17.5" cy="18" r="1.4"/>',
+    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+    phone: '<path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M11 18h2"/>',
+    percent: '<circle cx="7.5" cy="7.5" r="2.2"/><circle cx="16.5" cy="16.5" r="2.2"/><path d="M17 7 7 17"/>',
+    box: '<path d="M21 8 12 3 3 8l9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+    map: '<path d="M9 4 3 6.5V20l6-2.5L15 20l6-2.5V4l-6 2.5L9 4z"/><path d="M9 4v13.5M15 6.5V20"/>',
+    pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5z"/>',
+    arrow: '<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>',
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
+}
+
+function maskedPhone(phone) {
+  const dial = digits(phone);
+  if (dial.length < 4) return '••• •••';
+  return `${dial.slice(0, 2)}•• ••• ${dial.slice(-2)}`;
+}
+
+function contactsOpen(item) {
+  if (!item) return false;
+  if (quoteAccepted(item)) return true;
+  const qs = String(item.quoteStatus || '').trim();
+  if (qs === 'awaiting_company' || qs === 'offered' || qs === 'declined') return false;
+  if (quotePending(item)) return false;
+  const bucket = orderBucket(item);
+  return bucket === 'verified' || bucket === 'transit' || bucket === 'delivered';
+}
+
+function personAvatar(name, tone) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  const letters = ((parts[0] || '').charAt(0) + (parts[1] || '').charAt(0)).toUpperCase() || '•';
+  return `<span class="person-avatar ${tone}" aria-hidden="true">${esc(letters)}<i>${uiIcon(tone === 'receiver' ? 'pin' : 'arrow')}</i></span>`;
+}
+
+function phoneVisual(phone, open) {
+  if (!open) {
+    return `<p class="party-phone is-locked">${uiIcon('lock')}<span>${esc(maskedPhone(phone))}</span></p>`;
+  }
+  return `<p class="party-phone">${uiIcon('phone')}<span>${phoneLine(phone)}</span></p>`;
+}
+
+function commissionMark(amount) {
+  return `<div class="commission-mark" aria-label="Commission"><span class="commission-icon">${uiIcon('percent')}</span><strong data-commission-amount>${esc(money(quoteCommission(amount)))}</strong></div>`;
+}
+
+function quoteSeed(item) {
+  const draft = state.quoteDraftAmount?.[item.id];
+  if (draft != null && String(draft) !== '') return String(draft);
+  const fee = priceOf(item);
+  return fee > 0 ? String(fee) : '';
+}
+
+function photoStrip(item) {
+  void ensureCargoPhotos(item);
+  const photos = cargoPhotoList(item);
+  if (!photos.length) {
+    return `<div class="photo-strip is-empty" aria-hidden="true"><span class="photo-fallback">${uiIcon('box')}</span></div>`;
+  }
+  return `<div class="photo-strip">${photos.map((url) => `<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="" referrerpolicy="no-referrer" loading="lazy" /></a>`).join('')}</div>`;
+}
+
+function shipPriceRow(fee, extra = '') {
+  return `<div class="ship-row">
+    <div class="ship-figure"><span>Bei ya usafirishaji</span><strong>${esc(money(fee))}</strong></div>
+    ${commissionMark(fee)}
+    ${extra}
+  </div>`;
+}
+
 function quotePanel(item, opts = {}) {
   const qs = String(item.quoteStatus || '').trim();
   const declined = qs === 'declined' || /declined the company price/i.test(String(item.cancelReason || ''));
-  if (declined) {
-    return `<div class="price-quote-panel is-declined">
-      <p class="quote-editor-title">Mteja amekataa bei</p>
-      <p>${priceOf(item) > 0 ? `<strong>${money(priceOf(item))}</strong>` : 'Bei imekataliwa.'}</p>
-    </div>`;
-  }
-  if (['cancelled', 'delivered'].includes(String(item.shipmentStatus || ''))) return '';
-  const force = Boolean(opts.force) || needsCustomerPrice(item);
+  const status = String(item.shipmentStatus || '');
+  const closed = status === 'cancelled' || status === 'delivered' || orderBucket(item) === 'delivered';
   const editing = Boolean(opts.editing) || state.editingQuoteId === item.id;
-  const cargoValue = declaredValueOf(item);
-  const cargoNote = `<p class="muted quote-hint">Thamani ya bidhaa (${cargoValue ? money(cargoValue) : '—'}) si bei ya usafirishaji.</p>`;
-
-  if (qs === 'confirmed' && priceOf(item) > 0 && !editing) {
-    const fee = Math.round(Number(item.haulFee) || 0);
-    return `<div class="price-quote-panel is-confirmed">
-      <p class="quote-editor-title">Bei ya usafirishaji</p>
-      <p><strong>${money(priceOf(item))}</strong> · mteja amekubali.${fee > 0 ? ` Commission ${money(fee)}.` : ''}</p>
-      ${cargoNote}
-    </div>`;
+  const fee = priceOf(item);
+  if (!declined && !editing && fee > 0 && (closed || qs === 'confirmed' || qs === 'offered')) {
+    const tone = qs === 'offered' ? 'is-sent' : 'is-confirmed';
+    const edit = !closed && qs === 'offered'
+      ? `<button class="btn line small icon-btn" type="button" data-edit-quote="${esc(item.id)}" aria-label="Badilisha bei">${uiIcon('pencil')}</button>`
+      : '';
+    return `<div class="price-quote-panel ${tone}">${shipPriceRow(fee, edit)}</div>`;
   }
-
-  if (qs === 'offered' && priceOf(item) > 0 && !editing) {
-    const draft = Math.round(Number(item.quoteDraftCommissionTzs) || Number(item.haulFee) || 0);
-    return `<div class="price-quote-panel is-sent">
-      <p class="quote-editor-title">Bei ya usafirishaji imetumwa</p>
-      <p><strong>${money(priceOf(item))}</strong></p>
-      <p class="muted quote-hint">${draft > 0 ? `Commission draft ${money(draft)}.` : ''} Inasubiri mteja kukubali au kukataa.</p>
-      ${cargoNote}
-      <button class="btn line small" type="button" data-edit-quote="${esc(item.id)}">Badilisha bei</button>
-    </div>`;
-  }
-
-  if (!force && !editing) return '';
-
-  const rate = Number(companyStanding().feePercent || 12);
-  const seed = priceOf(item) > 0 ? priceOf(item) : '';
-  const seedFee = seed ? Math.round(seed * (rate / 100)) : '';
-  return `<form class="quote-form quote-form-stack price-quote-panel" data-quote="${esc(item.id)}">
-    <p class="quote-editor-title">Weka bei ya usafirishaji</p>
-    <p class="muted quote-hint">Andika bei ya usafirishaji tu. Mtumaji ataiona kwenye app na ataweza kukubali au kukataa.</p>
-    ${cargoNote}
-    <label>Bei ya usafirishaji (TZS)
-      <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="mfano 25000" required autofocus />
-    </label>
-    <label>Commission ya Haul (TZS) · ~${rate}%
-      <input name="commission" inputmode="numeric" type="number" min="0" step="100" value="${esc(seedFee)}" placeholder="mfano 3000" />
-    </label>
-    <p class="muted quote-hint">Commission inahesabiwa tu unapochukua oda.</p>
-    <button class="btn primary" type="submit">Tuma bei kwa mtumaji</button>
+  const force = Boolean(opts.force) || needsCustomerPrice(item) || declined || editing;
+  if (!force) return '';
+  const seed = quoteSeed(item);
+  const seedAmount = Math.round(Number(String(seed).replace(/[^\d]/g, '')) || 0);
+  return `<form class="quote-form price-quote-panel" data-quote="${esc(item.id)}">
+    <div class="ship-row">
+      <label class="ship-figure"><span>Bei ya usafirishaji</span>
+        <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="0" required />
+      </label>
+      ${commissionMark(seedAmount)}
+    </div>
+    <button class="btn primary" type="submit">Tuma bei</button>
   </form>`;
 }
 
@@ -2194,25 +2247,20 @@ function stageTracker(item) {
 }
 
 function stageAction(item) {
-  if (quotePending(item)) return '';
+  if (!contactsOpen(item)) return '';
   const bucket = orderBucket(item);
   if (!bucket || bucket === 'cancelled') return '';
   const id = esc(item.id);
   const busy = state.stageBusy === item.id;
-  if (bucket === 'delivered') {
-    return `${stageTracker(item)}<div class="stage-action is-done"><strong>${stageIcon('delivered')} Delivery completed</strong><p>The customer sees Delivered.</p></div>`;
-  }
+  const tracker = stageTracker(item);
+  if (bucket === 'delivered') return tracker;
   if (bucket === 'transit') {
-    return `${stageTracker(item)}<div class="stage-action"><p>Cargo is on the way. The customer sees On the Way.</p><button class="btn primary" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('delivered')} Mark as delivered</button></div>`;
+    return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('delivered')} Delivered</button></div>`;
   }
   if (bucket === 'verified') {
-    const quote = String(item.quoteStatus || '');
-    if (quote && quote !== 'confirmed') {
-      return `${stageTracker(item)}<div class="stage-action"><strong>Verified</strong><p>The customer sees Confirmed. Delivery starts after they confirm the price.</p></div>`;
-    }
-    return `${stageTracker(item)}<div class="stage-action"><p>The customer sees Confirmed.</p><button class="btn primary" type="button" data-act="start-transit" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('transit')} Start delivery</button></div>`;
+    return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="start-transit" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('transit')} Start</button></div>`;
   }
-  return `${stageTracker(item)}<div class="stage-action"><p>New order. The customer sees Order Received until you verify it.</p><button class="btn primary" type="button" data-act="accept" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('verified')} Verify order</button><button class="btn line" type="button" data-act="reject" data-id="${id}" ${busy ? 'disabled' : ''}>Decline</button></div>`;
+  return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="accept" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('verified')} Verify</button><button class="btn line" type="button" data-act="reject" data-id="${id}" ${busy ? 'disabled' : ''}>Decline</button></div>`;
 }
 
 function stageButton(item) {
@@ -2233,6 +2281,46 @@ function orderActions() {
 
 function orderPipeline() {
   return '';
+}
+
+function glanceBadge(item) {
+  const qs = String(item.quoteStatus || '').trim();
+  const declined = qs === 'declined' || /declined the company price/i.test(String(item.cancelReason || ''));
+  if (declined) return '<span class="badge stage-cancelled">Amekataa</span>';
+  if (!quoteAccepted(item) && qs === 'offered' && priceOf(item) > 0) return '<span class="badge stage-new">Bei imetumwa</span>';
+  if (qs === 'awaiting_company' || (orderBucket(item) === 'new' && priceOf(item) <= 0)) {
+    return '<span class="badge stage-new">Mpya</span>';
+  }
+  return stageBadge(item);
+}
+
+function placeName(value) {
+  const text = String(value || '').trim();
+  return text || '—';
+}
+
+function arriveCard(item, opts) {
+  void ensureCargoPhotos(item);
+  const open = state.deskOpen === item.id;
+  const from = placeName(item.pickupLabel || item.origin);
+  const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  const photo = cargoPhotoList(item)[0];
+  const thumb = photo
+    ? `<img class="arrive-thumb" src="${esc(photo)}" alt="" referrerpolicy="no-referrer" />`
+    : '';
+  return `<article class="arrive-card ${open ? 'is-open' : ''}">
+    <div class="arrive-row">
+      ${thumb}
+      <div class="arrive-route">
+        <strong title="${esc(from)}">${esc(from)}</strong>
+        <span class="arrive-arrow" aria-hidden="true">${uiIcon('arrow')}</span>
+        <strong title="${esc(to)}">${esc(to)}</strong>
+      </div>
+      ${glanceBadge(item)}
+      <button class="btn primary small arrive-toggle" type="button" data-desk="open" data-id="${esc(item.id)}" aria-expanded="${open ? 'true' : 'false'}">${open ? 'Hide details' : 'Show details'}</button>
+    </div>
+    ${open ? `<div class="arrive-detail">${orderBrief(item, opts)}</div>` : ''}
+  </article>`;
 }
 
 function ordersDesk(tab) {
@@ -2274,26 +2362,7 @@ function ordersDesk(tab) {
   const briefOpts = { forceQuote: current === 'new' || current === 'verified' };
   const body = !slice.length
     ? `<p class="empty">${query || fromMs || toMs ? 'Hakuna oda inayolingana na utafutaji.' : 'Hakuna oda katika hatua hii.'}</p>`
-    : current === 'new'
-      ? `<div class="order-stack">${slice.map((item) => orderBrief(item, briefOpts)).join('')}</div>${orderPager(rows.length, page, pages)}`
-      : `<div class="order-list">${slice.map((item) => {
-          const open = state.deskOpen === item.id;
-          const cargoValue = declaredValueOf(item);
-          const shippingFee = priceOf(item);
-          return `<div class="order-list-item ${open ? 'is-open' : ''}">
-            <button class="order-line" type="button" data-desk="open" data-id="${esc(item.id)}">
-              ${photoThumb(item)}
-              <span class="order-line-route">
-                <strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>
-                <em>${esc(item.pickupLabel || item.origin || '—')} → ${esc(dropOffLabel(item))}</em>
-              </span>
-              <span><small>Thamani ya bidhaa</small>${cargoValue ? money(cargoValue) : '—'}</span>
-              <span><small>Bei ya usafirishaji</small>${shippingFee > 0 ? money(shippingFee) : 'Bado'}</span>
-              ${stageBadge(item)}
-            </button>
-            ${open ? orderBrief(item, briefOpts) : ''}
-          </div>`;
-        }).join('')}</div>${orderPager(rows.length, page, pages)}`;
+    : `<div class="order-stack">${slice.map((item) => arriveCard(item, briefOpts)).join('')}</div>${orderPager(rows.length, page, pages)}`;
   return `<div class="order-desk mute-desk">
     <div class="desk-tools">
       <input id="deskSearch" type="search" placeholder="Search order, customer, phone, route" value="${esc(state.deskQuery || '')}" />
@@ -2305,13 +2374,9 @@ function ordersDesk(tab) {
   </div>`;
 }
 
-async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
-  const standing = companyStanding();
-  const rate = Number(standing.feePercent || 12) / 100;
-  const draftCommission = Math.max(
-    0,
-    Math.min(amount, Math.round(Number(commissionTzs) || amount * rate))
-  );
+async function sendCompanyQuote(shipmentId, amount) {
+  const rate = QUOTE_COMMISSION_RATE;
+  const draftCommission = quoteCommission(amount);
   const label = `TZS ${amount.toLocaleString('en-US')}`;
   try {
     await portalCall('/carrier/portal/quote', {
@@ -2530,52 +2595,54 @@ function orderPager(count, page, pages) {
 
 function orderBrief(item, opts = {}) {
   void ensureCargoPhotos(item);
-  const pending = quotePending(item);
+  const open = contactsOpen(item);
   const value = declaredValueOf(item);
-  const fee = priceOf(item);
-  const from = item.pickupLabel || item.origin || '—';
-  const to = item.recipientAddress || item.dropoffLabel || item.destination || item.outsideDestinationLabel || '—';
-  const phoneBlock = (phone) => pending
-    ? '<p class="brief-lock">Simu baada ya mteja kukubali bei</p>'
-    : `<p class="brief-phone">${phoneLine(phone)}</p>`;
+  const from = placeName(item.origin || item.pickupLabel);
+  const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  const sender = item.senderName || item.customerName || '—';
+  const receiver = item.recipientName || '—';
   return `<article class="order-brief">
-    <header class="brief-top">
-      <div>
-        <p class="brief-kicker">${pending ? 'Oda mpya' : 'HAUL'}</p>
-        <h2>${esc(item.orderNumber || item.id.slice(0, 8))}</h2>
+    <div class="route-visual">
+      <div class="route-stop">
+        <span class="pin origin">${uiIcon('pin')}</span>
+        <strong>${esc(from)}</strong>
       </div>
-      ${stageBadge(item)}
-    </header>
-    <div class="brief-route">
-      <div><span>Inatoka wapi</span><strong>${esc(from)}</strong></div>
-      <i aria-hidden="true">→</i>
-      <div><span>Inaenda wapi</span><strong>${esc(to)}</strong></div>
+      <div class="route-track" aria-hidden="true"><span></span><i>${uiIcon('truck')}</i><span></span></div>
+      <div class="route-stop">
+        <span class="pin dest">${uiIcon('pin')}</span>
+        <strong>${esc(to)}</strong>
+      </div>
+      <a class="route-map" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener" aria-label="Map">${uiIcon('map')}</a>
     </div>
-    ${renderCargoPhotos(item)}
-    <div class="brief-parties">
-      <div>
-        <span>Mtumaji</span>
-        <strong>${esc(item.senderName || item.customerName || '—')}</strong>
-        <p>${esc(from)}</p>
-        ${phoneBlock(item.senderPhone || item.customerPhone)}
+    <div class="party-row">
+      <div class="party">
+        ${personAvatar(sender, 'sender')}
+        <div>
+          <span class="sr-only">Sender</span>
+          <strong>${esc(sender)}</strong>
+          ${phoneVisual(item.senderPhone || item.customerPhone, open)}
+        </div>
       </div>
-      <div>
-        <span>Mpokeaji</span>
-        <strong>${esc(item.recipientName || '—')}</strong>
-        <p>${esc(item.recipientAddress || item.dropoffLabel || item.destination || '—')}</p>
-        ${phoneBlock(item.recipientPhone)}
+      <div class="party">
+        ${personAvatar(receiver, 'receiver')}
+        <div>
+          <span class="sr-only">Receiver</span>
+          <strong>${esc(receiver)}</strong>
+          ${phoneVisual(item.recipientPhone, open)}
+        </div>
       </div>
     </div>
-    <p class="brief-goods"><span>Thamani ya bidhaa</span><strong>${value ? esc(money(value)) : 'Haijatajwa'}</strong></p>
-    <p class="brief-note">Hii si bei ya usafirishaji.${fee > 0 ? ` Bei ya usafirishaji ${esc(money(fee))}.` : ''}</p>
-    <p class="brief-note">${esc(item.parcelDescription || 'Mzigo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</p>
+    ${photoStrip(item)}
+    <div class="goods-tile">
+      <span class="goods-ico">${uiIcon('box')}</span>
+      <div>
+        <span>Thamani ya bidhaa</span>
+        <strong>${value ? esc(money(value)) : '—'}</strong>
+      </div>
+    </div>
     ${quotePanel(item, { force: Boolean(opts.forceQuote) })}
-    ${pending ? '<p class="brief-wait">Hali ya oda na nambari za simu zitaonekana mteja akishakubali bei ya usafirishaji.</p>' : statusUploadPanel(item)}
-    <div class="actions map-actions">
-      <a class="btn dark small" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Open Google Maps</a>
-      ${opts.full && item.carrierId === state.carrier?.id ? `<a class="btn line small" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
-      ${opts.full ? '' : `<a class="btn line small" href="#/assignment/${esc(item.id)}">Fungua</a>`}
-    </div>
+    ${open ? stageAction(item) : ''}
+    ${opts.full && item.carrierId === state.carrier?.id ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}" aria-label="Receipt">${uiIcon('box')} Receipt</a></div>` : ''}
   </article>`;
 }
 
@@ -2840,12 +2907,12 @@ function stickerPage(id) {
         <section>
           <span>Kutoka</span>
           <strong>${esc(item.customerName || '—')}</strong>
-          <p>${quotePending(item) ? 'Baada ya kukubali' : esc(item.customerPhone || '—')}</p>
+          <p>${contactsOpen(item) ? esc(item.customerPhone || '—') : `${uiIcon('lock')} ${esc(maskedPhone(item.customerPhone))}`}</p>
         </section>
         <section>
           <span>Kwenda</span>
           <strong>${esc(item.recipientName || '—')}</strong>
-          <p>${quotePending(item) ? 'Baada ya kukubali' : esc(item.recipientPhone || '—')}</p>
+          <p>${contactsOpen(item) ? esc(item.recipientPhone || '—') : `${uiIcon('lock')} ${esc(maskedPhone(item.recipientPhone))}`}</p>
         </section>
       </div>
       <div class="sticker-meta sticker-meta-4">
@@ -3850,6 +3917,7 @@ async function onViewClick(event) {
       state.deskPage = Math.max(1, Number(deskCtl.dataset.page) || 1);
     }
     render();
+    document.querySelector('.arrive-card.is-open')?.scrollIntoView({ block: 'nearest' });
     return;
   }
   const actBtn = event.target.closest('[data-act]');
@@ -3915,13 +3983,12 @@ async function onViewClick(event) {
     const body = { shipmentId: id, locationName: act === 'deliver' ? 'Delivered' : undefined };
     if (act === 'accept') {
       const form = document.querySelector(`form[data-quote="${id}"]`);
-      const amount = Math.round(Number(String(form?.amount?.value || current.cashExpected || '').replace(/[^\d]/g, '')));
-      let commission = Math.round(Number(String(form?.commission?.value || current.quoteDraftCommissionTzs || '').replace(/[^\d]/g, '')));
-      if (amount >= 1000) body.amountTzs = amount;
-      if (form?.commission && commission >= 0) body.commissionTzs = commission;
-      else if (Number(current.quoteDraftCommissionTzs) > 0) {
-        commission = Math.round(Number(current.quoteDraftCommissionTzs));
-        body.commissionTzs = commission;
+      const typed = Math.round(Number(String(form?.amount?.value || '').replace(/[^\d]/g, '')));
+      const quoted = shippingFeeOf({ id, ...current });
+      const amount = typed >= 1000 ? typed : quoted;
+      if (amount >= 1000) {
+        body.amountTzs = amount;
+        body.commissionTzs = quoteCommission(amount);
       }
       const needsPrice = String(current.quoteStatus || '') === 'awaiting_company' || !(Number(current.cashExpected) > 0 || amount >= 1000);
       if (needsPrice && !(amount >= 1000)) {
@@ -3941,11 +4008,9 @@ async function onViewClick(event) {
           throw error;
         }
         // Local accept fallback: lock edited price + commission when company takes the order.
-        const fee = amount >= 1000 ? amount : Math.round(Number(current.cashExpected) || 0);
-        const rate = Number(companyStanding().feePercent || 12) / 100;
-        const haulFee = body.commissionTzs != null
-          ? Math.max(0, Math.min(fee, Math.round(Number(body.commissionTzs) || 0)))
-          : Math.round(fee * rate);
+        const fee = amount >= 1000 ? amount : shippingFeeOf({ id, ...current });
+        const rate = QUOTE_COMMISSION_RATE;
+        const haulFee = quoteCommission(fee);
         const label = fee > 0 ? `TZS ${fee.toLocaleString('en-US')}` : String(current.fareLabel || '').trim();
         const orderId = String(current.orderId || id).trim();
         const extras = {};
@@ -3979,7 +4044,7 @@ async function onViewClick(event) {
           haulFeeRate: fee > 0 ? haulFee / fee : rate,
           carrierNet: Math.max(0, fee - haulFee),
           commissionCountedAt: serverTimestamp(),
-          ...(fee > 0 ? { fareLabel: label, quoteStatus: 'offered' } : {}),
+          ...(fee > 0 ? { fareLabel: label, quoteStatus: 'offered', carrierQuoteTzs: fee, shippingFeeTzs: fee } : {}),
           statusHistory: arrayUnion({ status: 'received', label: 'Imepokelewa', at: stamp(), actor: state.user.email }),
           ...extras,
         };
@@ -3988,6 +4053,7 @@ async function onViewClick(event) {
           await setDoc(doc(db, 'orders', orderId), {
             quoteStatus: 'offered',
             carrierQuoteTzs: fee,
+            shippingFeeTzs: fee,
             fareLabel: label,
             totalLabel: label,
             carrierQuoteAt: serverTimestamp(),
@@ -4581,10 +4647,9 @@ function bindAuth() {
     const form = event.target.closest('form[data-quote]');
     if (!form || event.target.name !== 'amount') return;
     const amount = Math.round(Number(String(form.amount?.value || '').replace(/[^\d]/g, '')));
-    const rate = Number(companyStanding().feePercent || 12) / 100;
-    if (form.commission && document.activeElement !== form.commission) {
-      form.commission.value = amount > 0 ? String(Math.round(amount * rate)) : '';
-    }
+    state.quoteDraftAmount[form.dataset.quote] = form.amount.value;
+    const node = form.querySelector('[data-commission-amount]');
+    if (node) node.textContent = money(quoteCommission(amount));
   });
   $('view').addEventListener('submit', (event) => {
     const form = event.target.closest('form[data-quote]');
@@ -4592,14 +4657,15 @@ function bindAuth() {
     event.preventDefault();
     const shipmentId = form.dataset.quote;
     const amount = Math.round(Number(String(form.amount?.value || '').replace(/[^\d]/g, '')));
-    const commission = Math.round(Number(String(form.commission?.value || '').replace(/[^\d]/g, '')));
     if (!shipmentId || amount < 1000) {
       window.alert('Weka bei halali kwa TZS.');
       return;
     }
-    sendCompanyQuote(shipmentId, amount, commission)
+    sendCompanyQuote(shipmentId, amount)
       .then(() => {
+        delete state.quoteDraftAmount[shipmentId];
         state.editingQuoteId = null;
+        render();
         window.alert('Bei imetumwa kwa mteja.');
       })
       .catch((error) => {
