@@ -1702,9 +1702,20 @@ function orderClock(item) {
   return timeMs(item?.offeredAt) || timeMs(item?.createdAt) || timeMs(item?.acceptedAt) || timeMs(item?.updatedAt);
 }
 
+/** Matches backend carrier-commission isCompletedShipment — fee is due once arrived/handed. */
+function isCommissionComplete(item) {
+  const status = String(item?.shipmentStatus || '').toLowerCase();
+  const step = String(item?.trackStep || '').toLowerCase();
+  return status === 'arrived' || status === 'delivered' || step === 'arrived' || step === 'handed';
+}
+
+function haulFeeOf(item) {
+  return Math.max(0, Math.round(Number(item?.haulFee) || 0));
+}
+
 function commissionParts(item) {
-  const fee = Math.max(0, Math.round(Number(item?.haulFee) || 0));
-  const done = item?.shipmentStatus === 'delivered' || item?.shipmentStatus === 'arrived';
+  const fee = haulFeeOf(item);
+  const done = isCommissionComplete(item);
   const paid = done
     ? (item.cashStatus === 'reconciled' ? fee : Math.min(fee, Math.round(Number(item.commissionPaidTzs) || 0)))
     : 0;
@@ -1822,20 +1833,10 @@ function darDayKey(ms) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam' }).format(new Date(ms));
 }
 
-function agentOrderCommission(item) {
-  const explicit = Math.round(Number(item?.haulFee) || 0);
-  if (explicit > 0) return explicit;
-  const fee = priceOf(item);
-  if (fee <= 0) return 0;
-  const rate = Number(companyStanding().feePercent || 12) / 100;
-  return Math.max(0, Math.round(fee * rate));
-}
-
 function dashboardKpis() {
   const today = darTodayKey();
   let mapato = 0;
   let mapatoLeo = 0;
-  let commission = 0;
   let odaLeo = 0;
   let completed = 0;
   deskRows().forEach((item) => {
@@ -1843,17 +1844,19 @@ function dashboardKpis() {
     if (!bucket || bucket === 'cancelled') return;
     const day = darDayKey(orderClock(item));
     if (day === today) odaLeo += 1;
-    const owned = bucket === 'verified' || bucket === 'transit' || bucket === 'delivered';
-    const fee = owned ? priceOf(item) : 0;
-    if (fee > 0) {
-      mapato += fee;
-      if (day === today) mapatoLeo += fee;
+    // Mapato = shipping fees on accepted company work — never declaredValueTzs.
+    if (bucket === 'verified' || bucket === 'transit' || bucket === 'delivered') {
+      const fee = shippingFeeOf(item);
+      if (fee > 0) {
+        mapato += fee;
+        if (day === today) mapatoLeo += fee;
+      }
     }
-    if (bucket === 'delivered') {
-      completed += 1;
-      commission += agentOrderCommission(item);
-    }
+    // Zilizokamilika = delivered / handed only (not merely arrived).
+    if (bucket === 'delivered') completed += 1;
   });
+  // Commission = same stored haulFee total as Payments debtSnapshot.totalDebt (no invented %).
+  const commission = debtSnapshot().totalDebt;
   return { mapato, mapatoLeo, commission, odaLeo, completed };
 }
 
@@ -1884,12 +1887,18 @@ function dashRangeDays() {
     return days.length ? days : [{ key: todayKey, label: darTodayLabel(), count: 0 }];
   }
   const days = [];
-  const now = Date.now();
+  const todayKey = darTodayKey();
+  const [year, month, day] = todayKey.split('-').map(Number);
   for (let i = 13; i >= 0; i -= 1) {
-    const ms = now - i * 86400000;
+    // Noon Africa/Dar_es_Salaam so calendar keys never drift across UTC midnight.
+    const ms = Date.UTC(year, month - 1, day - i, 9, 0, 0);
     days.push({
       key: darDayKey(ms),
-      label: new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+      label: new Date(ms).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        timeZone: 'Africa/Dar_es_Salaam',
+      }),
       count: 0,
     });
   }
@@ -3099,13 +3108,7 @@ function companyStanding() {
   const closure = Boolean(carrier.offersPaused || carrier.fraudHold) || postAcceptCancels >= 3 || (cancelRate >= 0.4 && decisions >= 8);
   const punished = highCancel || closure;
   const next = TIER_RULES[TIER_RULES.findIndex((rule) => rule.id === tier.id) + 1] || null;
-  const unpaid = owned.reduce((sum, item) => {
-    const done = item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived';
-    if (!done) return sum;
-    const fee = Math.max(0, Math.round(Number(item.haulFee) || 0));
-    const paid = item.cashStatus === 'reconciled' ? fee : Math.min(fee, Math.round(Number(item.commissionPaidTzs) || 0));
-    return sum + Math.max(0, fee - paid);
-  }, 0);
+  const unpaid = owned.reduce((sum, item) => sum + commissionParts(item).outstanding, 0);
   const ceiling = punished ? TIER_RULES[0].payCeilingTzs : tier.payCeilingTzs;
   return {
     streak,
@@ -3131,7 +3134,7 @@ function financePage() {
   const next = standing.next ? `${standing.next.label} at streak ${standing.next.minStreak}` : 'Top tier';
   const progress = standing.next ? Math.min(100, Math.round((standing.streak / standing.next.minStreak) * 100)) : 100;
   const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
-  const delivered = owned.filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived');
+  const delivered = owned.filter((item) => isCommissionComplete(item));
   const net = delivered.reduce((sum, item) => sum + (Number(item.carrierNet) || 0), 0);
   const notice = standing.blocked
     ? `<p class="form-error">${esc(standing.reason)}</p>`
@@ -3641,7 +3644,7 @@ function reportsPage() {
 
 function debtSnapshot() {
   const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
-  const delivered = owned.filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived');
+  const delivered = owned.filter((item) => isCommissionComplete(item));
   const rows = delivered.map((item) => {
     const part = commissionParts(item);
     return {
