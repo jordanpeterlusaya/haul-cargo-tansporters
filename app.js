@@ -1992,15 +1992,26 @@ function smoothSeriesPath(points) {
   return path;
 }
 
-function ordersOverTimeChart(days) {
-  const scale = niceYScale(Math.max(0, ...days.map((day) => day.count)));
+function formatAxisMoney(value) {
+  const amount = Math.max(0, Math.round(Number(value) || 0));
+  if (amount >= 1_000_000) {
+    const millions = amount / 1_000_000;
+    return `${millions >= 10 || Number.isInteger(millions) ? millions.toFixed(0) : millions.toFixed(1)}M`;
+  }
+  if (amount >= 1000) return `${Math.round(amount / 1000)}k`;
+  return String(amount);
+}
+
+function seriesOverTimeChart(days, opts = {}) {
+  const values = days.map((day) => Number(day.count) || 0);
+  const scale = niceYScale(Math.max(0, ...values));
   const n = days.length;
   const yPad = 8;
   const yPos = (count) => yPad + (1 - (count / scale.max)) * (100 - yPad * 2);
   const xPos = (index) => (n <= 1 ? 50 : (index / (n - 1)) * 100);
   const points = days.map((day, index) => ({
     x: xPos(index),
-    y: yPos(day.count),
+    y: yPos(Number(day.count) || 0),
     day,
   }));
   const linePath = smoothSeriesPath(points);
@@ -2008,23 +2019,30 @@ function ordersOverTimeChart(days) {
   const first = points[0];
   const last = points[points.length - 1];
   const areaPath = `${linePath} L${last.x.toFixed(2)} ${baseline.toFixed(2)} L${first.x.toFixed(2)} ${baseline.toFixed(2)} Z`;
+  const formatY = typeof opts.formatY === 'function' ? opts.formatY : (tick) => Math.round(tick).toLocaleString('en-US');
+  const formatTip = typeof opts.formatTip === 'function'
+    ? opts.formatTip
+    : (day) => `${Number(day.count) || 0} oda`;
+  const yTitle = opts.yTitle || 'Oda';
+  const gradId = opts.gradientId || 'ordersAreaFill';
+  const stroke = opts.stroke || '#14532d';
   const grid = scale.ticks.map((tick) => {
     const y = yPos(tick);
     const baselineClass = tick === 0 ? ' orders-chart-baseline' : '';
     return `<line class="orders-chart-grid${baselineClass}" x1="0" y1="${y.toFixed(2)}" x2="100" y2="${y.toFixed(2)}" />`;
   }).join('');
   const yTicks = scale.ticks.map((tick) => (
-    `<span class="orders-chart-ytick" style="top:${yPos(tick).toFixed(2)}%">${esc(Math.round(tick).toLocaleString('en-US'))}</span>`
+    `<span class="orders-chart-ytick" style="top:${yPos(tick).toFixed(2)}%">${esc(formatY(tick))}</span>`
   )).join('');
   const pickLabels = (indexes, gap) => {
     if (indexes.length <= 1) return indexes.slice();
-    const last = indexes[indexes.length - 1];
+    const lastIndex = indexes[indexes.length - 1];
     const chosen = [indexes[0]];
     indexes.slice(1, -1).forEach((index) => {
       const prev = chosen[chosen.length - 1];
-      if (points[index].x - points[prev].x >= gap && points[last].x - points[index].x >= gap) chosen.push(index);
+      if (points[index].x - points[prev].x >= gap && points[lastIndex].x - points[index].x >= gap) chosen.push(index);
     });
-    chosen.push(last);
+    chosen.push(lastIndex);
     return chosen;
   };
   const wideLabels = pickLabels(points.map((_, index) => index), 16);
@@ -2038,29 +2056,30 @@ function ordersOverTimeChart(days) {
   const column = n <= 1 ? 28 : 100 / (n - 1);
   const hits = points.map((point) => {
     const edge = point.x < 12 ? ' tip-start' : point.x > 88 ? ' tip-end' : '';
-    return `<button type="button" class="orders-chart-hit${edge}" style="left:${point.x.toFixed(2)}%;width:${column.toFixed(2)}%" aria-label="${esc(point.day.label)}, ${point.day.count} oda">
+    const tip = formatTip(point.day);
+    return `<button type="button" class="orders-chart-hit${edge}" style="left:${point.x.toFixed(2)}%;width:${column.toFixed(2)}%" aria-label="${esc(point.day.label)}, ${esc(tip)}">
       <i class="orders-chart-dot" style="top:${point.y.toFixed(2)}%"></i>
-      <span class="orders-chart-tip" style="top:${point.y.toFixed(2)}%"><b>${esc(point.day.label)}</b><em>${esc(String(point.day.count))} oda</em></span>
+      <span class="orders-chart-tip" style="top:${point.y.toFixed(2)}%"><b>${esc(point.day.label)}</b><em>${esc(tip)}</em></span>
     </button>`;
   }).join('');
   return `<div class="orders-chart">
     <div class="orders-chart-body">
       <div class="orders-chart-ycol">
-        <span class="orders-chart-ytitle">Oda</span>
+        <span class="orders-chart-ytitle">${esc(yTitle)}</span>
         ${yTicks}
       </div>
       <div class="orders-chart-plot">
         <svg class="orders-chart-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <defs>
-            <linearGradient id="ordersAreaFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#14532d" stop-opacity="0.16"/>
-              <stop offset="72%" stop-color="#14532d" stop-opacity="0.04"/>
-              <stop offset="100%" stop-color="#14532d" stop-opacity="0"/>
+            <linearGradient id="${esc(gradId)}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${esc(stroke)}" stop-opacity="0.16"/>
+              <stop offset="72%" stop-color="${esc(stroke)}" stop-opacity="0.04"/>
+              <stop offset="100%" stop-color="${esc(stroke)}" stop-opacity="0"/>
             </linearGradient>
           </defs>
           ${grid}
-          <path class="orders-chart-area" d="${areaPath}" fill="url(#ordersAreaFill)"/>
-          <path class="orders-chart-line" d="${linePath}"/>
+          <path class="orders-chart-area" d="${areaPath}" fill="url(#${esc(gradId)})"/>
+          <path class="orders-chart-line" d="${linePath}" style="stroke:${esc(stroke)}"/>
         </svg>
         <i class="orders-chart-end" style="left:${last.x.toFixed(2)}%;top:${last.y.toFixed(2)}%"></i>
         ${hits}
@@ -2068,6 +2087,59 @@ function ordersOverTimeChart(days) {
       <div class="orders-chart-xlabels">${xLabels}</div>
     </div>
   </div>`;
+}
+
+function ordersOverTimeChart(days) {
+  return seriesOverTimeChart(days, {
+    yTitle: 'Oda',
+    gradientId: 'ordersAreaFill',
+    stroke: '#14532d',
+    formatTip: (day) => `${Number(day.count) || 0} oda`,
+  });
+}
+
+function mapatoTrend() {
+  const days = dashRangeDays().map((day) => ({ ...day, count: 0 }));
+  const index = new Map(days.map((day) => [day.key, day]));
+  let dated = 0;
+  deskRows().forEach((item) => {
+    const bucket = orderBucket(item);
+    if (!(bucket === 'verified' || bucket === 'transit' || bucket === 'delivered')) return;
+    const fee = shippingFeeOf(item);
+    if (fee <= 0) return;
+    const ms = orderClock(item);
+    if (!ms) return;
+    dated += 1;
+    const slot = index.get(darDayKey(ms));
+    if (!slot) return;
+    slot.count += fee;
+  });
+  return {
+    days,
+    dated,
+    total: days.reduce((sum, day) => sum + (Number(day.count) || 0), 0),
+    rangeLabel: state.dashRange === 'month' ? currentMonthLabel() : 'Siku 14',
+  };
+}
+
+function mapatoOverTimeChart(days) {
+  return seriesOverTimeChart(days, {
+    yTitle: 'TZS',
+    gradientId: 'mapatoAreaFill',
+    stroke: '#111827',
+    formatY: formatAxisMoney,
+    formatTip: (day) => money(day.count),
+  });
+}
+
+function companyInitials(name) {
+  return String(name || 'HAUL')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0] || '')
+    .join('')
+    .toUpperCase() || 'H';
 }
 
 function metricCell(label, value, tone) {
@@ -3248,68 +3320,121 @@ function companyStanding() {
 }
 
 function financePage() {
+  const company = state.carrier?.companyName || 'Transporter';
+  const kpis = dashboardKpis();
+  const snap = debtSnapshot();
   const standing = companyStanding();
-  const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
-  const delivered = owned.filter((item) => isCommissionComplete(item));
-  const net = delivered.reduce((sum, item) => sum + (Number(item.carrierNet) || 0), 0);
+  const trend = mapatoTrend();
+  const range = state.dashRange === 'month' ? 'month' : '14d';
+  const payments = [...(state.commissionPayments || [])]
+    .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0))
+    .slice(0, 5);
+  const unpaidPreview = snap.unpaidOrders.slice(0, 6);
   const notice = standing.blocked
-    ? `<p class="form-error">${esc(standing.reason)}</p>`
+    ? `<p class="form-error fin-notice">${esc(standing.reason)}</p>`
     : '';
-  const generated = delivered.reduce((sum, item) => sum + commissionParts(item).fee, 0);
-  const paid = delivered.reduce((sum, item) => sum + commissionParts(item).paid, 0);
-  const months = new Map();
-  delivered.forEach((item) => {
-    const ms = timeMs(item.deliveredAt);
-    const part = commissionParts(item);
-    if (!ms || !part.fee) return;
-    const key = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Dar_es_Salaam', year: 'numeric', month: 'short' }).format(new Date(ms));
-    months.set(key, (months.get(key) || 0) + part.fee);
-  });
-  const monthRows = [...months.entries()];
-  const monthMax = Math.max(1, ...monthRows.map(([, value]) => value));
-  return `${notice}
-  <section class="metric-strip">
-    ${metricCell('Commission generated', money(generated))}
-    ${metricCell('Commission paid', money(paid))}
-    ${metricCell('Outstanding', money(standing.unpaid), standing.unpaid ? 'hot' : '')}
-    ${metricCell('Carrier net', money(net))}
-    ${metricCell('Completed orders', delivered.length)}
-    ${metricCell('Pay ceiling', money(standing.ceiling))}
-  </section>
-  <section class="panel lvl-finance-card">
-    <div class="lvl-finance-copy">
-      <p class="lp-kicker">Membership</p>
-      <h2>Bronze · ${standing.feePercent}% commission</h2>
-      <p class="muted">${standing.blocked ? esc(standing.reason) : 'Eligible to receive cargo orders. Commission uses the stored haulFee on each completed order.'}</p>
-    </div>
-    <button class="btn line small" data-go="levels" type="button">View Level</button>
-  </section>
-  ${monthRows.length ? `<section class="panel"><h2>Commission by month</h2><div class="month-bars">${monthRows.map(([label, value]) => `<div><span>${esc(label)}</span><i style="width:${Math.round((value / monthMax) * 100)}%"></i><b>${money(value)}</b></div>`).join('')}</div></section>` : ''}
-  <section class="panel debt-finance-cta">
-    <div>
-      <p class="lp-kicker">Debt settlement</p>
-      <h2>Pay outstanding Haul commission</h2>
-      <p class="muted">Settle full or partial balances via M-Pesa, Mixx, or Airtel. Balance updates only after verified payment.</p>
-    </div>
-    <div class="debt-finance-cta-actions">
-      <strong>${esc(moneyTsh(standing.unpaid))}</strong>
-      <button class="btn primary" data-go="payments" type="button">Open Payments</button>
-    </div>
-  </section>
-  <section class="panel"><h2>Commission by order</h2>
-    ${delivered.length ? `<div class="table-wrap"><table class="ops-table"><thead><tr><th>Order</th><th>Route</th><th>Delivered</th><th>Earned</th><th>Paid</th><th>Outstanding</th><th>State</th></tr></thead><tbody>${delivered.map((item) => {
-      const part = commissionParts(item);
-      const stateLabel = part.outstanding > 0 ? 'Outstanding' : (part.fee > 0 ? 'Paid' : 'No fee');
-      return `<tr>
-        <td><strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
-        <td>${esc(dropOffLabel(item))}</td>
-        <td>${esc(when(item.deliveredAt))}</td>
-        <td>${money(part.fee)}</td>
-        <td>${money(part.paid)}</td>
-        <td>${money(part.outstanding)}</td>
-        <td><span class="badge ${part.outstanding > 0 ? '' : 'live'}">${stateLabel}</span></td>
-      </tr>`;
-    }).join('')}</tbody></table></div>` : '<p class="empty">Completed shipments will show commission here.</p>'}
+  const paymentRows = payments.length
+    ? `<div class="table-wrap"><table class="ops-table debt-table">
+        <thead><tr><th>Date</th><th>Amount</th><th>Status</th></tr></thead>
+        <tbody>${payments.map((row) => {
+          const whenLabel = row.at
+            ? new Date(row.at).toLocaleString('en-TZ', { day: '2-digit', month: 'short', year: 'numeric' })
+            : '—';
+          return `<tr>
+            <td>${esc(whenLabel)}</td>
+            <td>${esc(moneyTsh(row.amountTzs))}</td>
+            <td>${payStatusChip(row.status)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`
+    : '<p class="empty">No settlement payments yet.</p>';
+  const unpaidRows = unpaidPreview.length
+    ? `<div class="table-wrap"><table class="ops-table debt-table">
+        <thead><tr><th>Order</th><th>Commission</th><th>Remaining</th></tr></thead>
+        <tbody>${unpaidPreview.map((row) => `<tr>
+          <td><a href="#/assignment/${esc(row.item.id)}">${esc(row.item.orderNumber || row.item.id.slice(0, 8))}</a></td>
+          <td>${esc(moneyTsh(row.fee))}</td>
+          <td>${esc(moneyTsh(row.outstanding))}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`
+    : '<p class="empty">No unpaid commission on completed orders.</p>';
+
+  return `${notice}<section class="sales-overview fin-page">
+    <header class="so-head">
+      <div>
+        <p class="so-kicker">HAUL · Finance · ${esc(company)}</p>
+        <h2>Financial overview</h2>
+        <p class="so-sub">${esc(darTodayLabel())} · Mapato, commission, and settlements from live portal data</p>
+      </div>
+      <div class="so-controls" role="group" aria-label="Period">
+        <button class="so-range-btn ${range === '14d' ? 'is-active' : ''}" type="button" data-dash-range="14d">14 days</button>
+        <button class="so-range-btn ${range === 'month' ? 'is-active' : ''}" type="button" data-dash-range="month">${esc(currentMonthLabel())}</button>
+      </div>
+    </header>
+
+    <section class="so-kpis fin-kpis" aria-label="Financial KPIs">
+      ${kpiCard('Mapato', money(kpis.mapato))}
+      ${kpiCard('Mapato ya leo', money(kpis.mapatoLeo), kpis.mapatoLeo ? 'hot' : '')}
+      ${kpiCard('Commission', money(snap.totalDebt))}
+      ${kpiCard('Paid', money(snap.totalPaid))}
+      ${kpiCard('Outstanding', money(snap.outstanding), snap.outstanding ? 'hot' : '')}
+      ${kpiCard('Completed orders', String(snap.delivered.length), snap.delivered.length ? 'live' : '')}
+    </section>
+
+    <section class="so-card so-chart-card" aria-label="Mapato over time">
+      <div class="so-chart-head">
+        <h3>Mapato × time</h3>
+        <span>${esc(trend.rangeLabel)} · ${esc(money(trend.total))}</span>
+      </div>
+      ${trend.dated
+        ? mapatoOverTimeChart(trend.days)
+        : '<p class="empty so-empty">No Mapato in this period yet. Accepted shipping fees appear here as orders progress.</p>'}
+    </section>
+
+    <section class="fin-secondary" aria-label="Settlement and membership">
+      <article class="so-card fin-settle">
+        <div>
+          <p class="so-kicker">Debt settlement</p>
+          <h3>Outstanding Haul commission</h3>
+          <p class="muted">Settle via M-Pesa, Mixx, or Airtel. Balances update only after verified payment.</p>
+        </div>
+        <div class="fin-settle-actions">
+          <strong>${esc(moneyTsh(snap.outstanding))}</strong>
+          <button class="btn primary" data-go="payments" type="button"${snap.outstanding < 100 ? ' disabled' : ''}>Pay Now</button>
+        </div>
+      </article>
+
+      <article class="so-card fin-member">
+        <div>
+          <p class="so-kicker">Membership</p>
+          <h3>Bronze · ${standing.feePercent}%</h3>
+          <p class="muted">${standing.blocked
+            ? esc(standing.reason)
+            : `Pay ceiling ${esc(moneyTsh(standing.ceiling))}. Commission uses stored haulFee on completed orders.`}</p>
+        </div>
+        <button class="btn line" data-go="levels" type="button">View Level</button>
+      </article>
+
+      <article class="so-card fin-side-card">
+        <div class="section-head">
+          <h3>Unpaid orders</h3>
+          <p class="muted">${snap.unpaidOrders.length} with remaining balance</p>
+        </div>
+        ${unpaidRows}
+        ${snap.unpaidOrders.length > unpaidPreview.length
+          ? `<button class="btn line small" data-go="payments" type="button">Open Payments</button>`
+          : ''}
+      </article>
+
+      <article class="so-card fin-side-card">
+        <div class="section-head">
+          <h3>Payment history</h3>
+          <p class="muted">Recent verified settlements</p>
+        </div>
+        ${paymentRows}
+        <button class="btn line small" data-go="payments" type="button">Full history</button>
+      </article>
+    </section>
   </section>`;
 }
 
@@ -4699,20 +4824,106 @@ function companyPages() {
     const selected = new Set((carrier.coverageRegions || []).map(String));
     const regionOptions = TZ_REGIONS.map((region) => `<option value="${esc(region)}" ${carrier.region === region ? 'selected' : ''}>${esc(region)}</option>`).join('');
     const regionChecks = TZ_REGIONS.map((region) => `<label class="check-row"><input type="checkbox" name="coverageRegion" value="${esc(region)}" ${!allTz && selected.has(region) ? 'checked' : ''} ${allTz ? 'disabled' : ''}/><span>${esc(region)}</span></label>`).join('');
-    return `<form id="profileForm" class="panel"><h2>Company Profile</h2>
-      <label>Company name</label><input name="companyName" value="${esc(carrier.companyName || '')}" />
-      <div class="form-grid"><div><label>Contact person</label><input name="contactPerson" value="${esc(carrier.contactPerson || '')}" /></div>
-      <div><label>Phone (SMS alerts)</label><input name="phone" value="${esc(carrier.phone || '')}" /></div></div>
-      <label>Business email</label><input value="${esc(carrier.email || '')}" disabled />
-      <label>Base region</label><select name="region">${regionOptions}</select>
-      <label>Office location</label><input name="location" value="${esc(carrier.location || '')}" />
-      <fieldset class="coverage-box"><legend>Operating regions</legend>
-        <label class="check-row"><input type="checkbox" name="coverageAllTanzania" id="profileCoverageAll" value="1" ${allTz ? 'checked' : ''}/><span>All Tanzania regions</span></label>
-        <div class="region-grid" id="profileRegionGrid">${regionChecks}</div>
-      </fieldset>
-      <label>Business details</label><textarea name="businessDetails">${esc(carrier.businessDetails || '')}</textarea>
-      <label class="check-row"><input type="checkbox" name="notifySms" value="1" ${carrier.notifySms !== false ? 'checked' : ''}/><span>SMS notifications to company phone</span></label>
-      <button class="btn primary" type="submit">Save profile</button></form>`;
+    const standing = companyStanding();
+    const driversCount = (state.drivers || []).filter((driver) => digits(driver?.phone).length >= 9 || String(driver?.name || '').trim()).length
+      || (state.drivers || []).length;
+    const companyName = carrier.companyName || carrier.tradingName || carrier.name || 'Company';
+    const verifyKey = String(carrier.status || 'pending').toLowerCase();
+    const coverageLabel = allTz
+      ? 'All Tanzania'
+      : (carrier.coverageRegions || []).length
+        ? `${(carrier.coverageRegions || []).length} region${(carrier.coverageRegions || []).length === 1 ? '' : 's'}`
+        : 'Not set';
+    const office = String(carrier.location || carrier.physicalAddress || '').trim();
+    const region = String(carrier.region || '').trim();
+    const placeLine = [office, region].filter(Boolean).join(' · ') || 'Office location not set';
+    return `<section class="co-profile">
+      <header class="co-hero panel">
+        <div class="co-avatar-lg" aria-hidden="true">${esc(companyInitials(companyName))}</div>
+        <div class="co-hero-copy">
+          <p class="co-eyebrow">HAUL · Company Profile</p>
+          <h1>${esc(companyName)}</h1>
+          <p class="co-lede">${esc(placeLine)}</p>
+          <div class="co-badge-row">
+            ${carrierVerifyBadge(verifyKey)}
+            <button class="co-member-badge" data-go="levels" type="button" title="Open Level">
+              <span>Bronze</span>
+              <em>${standing.feePercent}%</em>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section class="co-facts" aria-label="Company facts">
+        <article class="co-fact">
+          <span>Phone</span>
+          <strong>${esc(carrier.phone || '—')}</strong>
+        </article>
+        <article class="co-fact">
+          <span>Email</span>
+          <strong>${esc(carrier.email || '—')}</strong>
+        </article>
+        <article class="co-fact">
+          <span>Base region</span>
+          <strong>${esc(region || '—')}</strong>
+        </article>
+        <article class="co-fact">
+          <span>Drivers</span>
+          <strong>${driversCount}</strong>
+        </article>
+        <article class="co-fact">
+          <span>Coverage</span>
+          <strong>${esc(coverageLabel)}</strong>
+        </article>
+        <article class="co-fact">
+          <span>Membership</span>
+          <strong>Bronze · ${standing.feePercent}%</strong>
+        </article>
+      </section>
+
+      <section class="panel co-status-card">
+        ${carrierVerifyBadge(verifyKey)}
+        <p class="muted">${esc(carrierStatusHint(verifyKey))}</p>
+        ${carrier.rejectionReason ? `<p class="muted">Reason: ${esc(carrier.rejectionReason)}</p>` : ''}
+      </section>
+
+      <form id="profileForm" class="panel co-edit">
+        <div class="section-head">
+          <h2>Edit company details</h2>
+          <p class="muted">Only fields already stored on your transporter account.</p>
+        </div>
+        <label>Company name</label>
+        <input name="companyName" value="${esc(carrier.companyName || '')}" autocomplete="organization" />
+        <div class="form-grid">
+          <div>
+            <label>Contact person</label>
+            <input name="contactPerson" value="${esc(carrier.contactPerson || '')}" autocomplete="name" />
+          </div>
+          <div>
+            <label>Phone (SMS alerts)</label>
+            <input name="phone" value="${esc(carrier.phone || '')}" inputmode="tel" autocomplete="tel" />
+          </div>
+        </div>
+        <label>Business email</label>
+        <input value="${esc(carrier.email || '')}" disabled />
+        <label>Base region</label>
+        <select name="region">${regionOptions}</select>
+        <label>Office location</label>
+        <input name="location" value="${esc(carrier.location || '')}" autocomplete="address-line1" />
+        <fieldset class="coverage-box">
+          <legend>Operating regions</legend>
+          <label class="check-row"><input type="checkbox" name="coverageAllTanzania" id="profileCoverageAll" value="1" ${allTz ? 'checked' : ''}/><span>All Tanzania regions</span></label>
+          <div class="region-grid" id="profileRegionGrid">${regionChecks}</div>
+        </fieldset>
+        <label>Business details</label>
+        <textarea name="businessDetails">${esc(carrier.businessDetails || '')}</textarea>
+        <label class="check-row"><input type="checkbox" name="notifySms" value="1" ${carrier.notifySms !== false ? 'checked' : ''}/><span>SMS notifications to company phone</span></label>
+        <div class="co-edit-actions">
+          <button class="btn primary" type="submit">Save profile</button>
+          <button class="btn line" data-go="levels" type="button">View Level</button>
+        </div>
+      </form>
+    </section>`;
   }
   if (page === 'verification' && carrier) {
     const docs = carrier.documents || {};
@@ -5034,7 +5245,7 @@ async function render() {
   };
   $('pageTitle').textContent = titles[page] || 'Dashboard';
   const viewEl = $('view');
-  viewEl.classList.toggle('wide', ['fares', 'payments', 'fedha', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment', 'drivers', 'trips', 'vehicles', 'levels'].includes(page));
+  viewEl.classList.toggle('wide', ['fares', 'payments', 'fedha', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment', 'drivers', 'trips', 'vehicles', 'levels', 'profile'].includes(page));
   const rows = state.shipments.filter(mine);
   let html = '';
   if (!state.carrier && !state.isAdmin && page !== 'desk' && page !== 'uthibitisho') {
@@ -5062,10 +5273,13 @@ async function render() {
   else if (['profile', 'verification', 'staff', 'notifications'].includes(page)) html = companyPages();
   else html = dashboard();
   viewEl.innerHTML = html;
-  if ((page === 'payments' || page === 'fedha') && !state.payFlow) {
+  if ((page === 'payments' || page === 'fedha' || page === 'finance') && !state.payFlow) {
+    const snapshotAt = state.financeSnapshotAt || 0;
     refreshFinanceSnapshot().then((payload) => {
       if (!payload || state.payFlow) return;
-      if (route().page === 'payments' || route().page === 'fedha') render();
+      if ((state.financeSnapshotAt || 0) <= snapshotAt) return;
+      const now = route().page;
+      if (now === 'payments' || now === 'fedha' || now === 'finance') render();
     }).catch(() => null);
   }
   if (viewEl.querySelector('[data-unquoted-since], [data-offer-until]')) startCountdownTicker();
