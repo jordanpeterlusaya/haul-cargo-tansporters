@@ -2245,47 +2245,72 @@ function partyMissing(item) {
   return !senderPhone || !recipientPhone || !String(item?.senderName || item?.customerName || '').trim() || !String(item?.recipientName || '').trim() || !hasPickupCoords(item);
 }
 
+function applyPartyPatch(item, patch) {
+  if (!item?.id || !patch || !Object.keys(patch).length) return item;
+  Object.assign(item, patch);
+  const idx = state.shipments.findIndex((row) => row.id === item.id);
+  if (idx >= 0) state.shipments[idx] = { ...state.shipments[idx], ...patch };
+  if (state.pendingStages[item.id]) Object.assign(state.pendingStages[item.id], patch);
+  return item;
+}
+
+function partyPatchFromSource(item, source) {
+  if (!item || !source) return {};
+  const patch = {};
+  const senderPhone = String(source.senderPhone || source.customerPhone || source.phoneNumber || '').trim();
+  const senderName = String(source.senderName || source.customerName || source.fullName || '').trim();
+  const recipientName = String(source.recipientName || source.receiverName || '').trim();
+  const recipientPhone = String(source.recipientPhone || source.receiverPhone || '').trim();
+  if (senderPhone && !String(item.senderPhone || item.customerPhone || '').trim()) {
+    patch.senderPhone = senderPhone;
+    patch.customerPhone = senderPhone;
+  }
+  if (senderName && !String(item.senderName || item.customerName || '').trim()) {
+    patch.senderName = senderName;
+    patch.customerName = senderName;
+  }
+  if (recipientName && !String(item.recipientName || '').trim()) patch.recipientName = recipientName;
+  if (recipientPhone && !String(item.recipientPhone || '').trim()) patch.recipientPhone = recipientPhone;
+  const lat = Number(source.pickupLatitude ?? source.pickupLat);
+  const lng = Number(source.pickupLongitude ?? source.pickupLng);
+  if (!hasPickupCoords(item) && Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+    patch.pickupLatitude = lat;
+    patch.pickupLongitude = lng;
+  }
+  if (source.pickupLabel && !String(item.pickupLabel || '').trim()) patch.pickupLabel = String(source.pickupLabel).trim();
+  const photos = cargoPhotoList(source);
+  if (photos.length && !cargoPhotoList(item).length) {
+    patch.parcelPhotoUrls = photos.slice(0, 6);
+    patch.parcelPhotoUrl = photos[0];
+  }
+  return patch;
+}
+
 async function ensureAcceptedParty(item) {
   if (!item?.id || !agentTookOrder(item) || !partyMissing(item)) return item;
   if (partyEnrichPending[item.id]) return item;
   partyEnrichPending[item.id] = true;
   try {
+    // Prefer portal API — carriers often cannot read customer orders directly.
+    if (state.user) {
+      try {
+        const payload = await portalCall(`/carrier/portal/photos?shipmentId=${encodeURIComponent(item.id)}`);
+        const patch = partyPatchFromSource(item, payload);
+        if (Object.keys(patch).length) {
+          applyPartyPatch(item, patch);
+          render();
+          if (!partyMissing(item)) return item;
+        }
+      } catch (apiError) {
+        console.warn('portal party api failed', apiError?.message || apiError);
+      }
+    }
     const orderId = String(item.orderId || item.id).trim();
     const snap = await getDoc(doc(db, 'orders', orderId));
     if (!snap.exists()) return item;
-    const order = snap.data() || {};
-    const patch = {};
-    const senderPhone = String(order.senderPhone || order.customerPhone || order.phoneNumber || '').trim();
-    const senderName = String(order.senderName || order.customerName || order.fullName || '').trim();
-    const recipientName = String(order.recipientName || order.receiverName || '').trim();
-    const recipientPhone = String(order.recipientPhone || order.receiverPhone || '').trim();
-    if (senderPhone && !String(item.senderPhone || item.customerPhone || '').trim()) {
-      patch.senderPhone = senderPhone;
-      patch.customerPhone = senderPhone;
-    }
-    if (senderName && !String(item.senderName || item.customerName || '').trim()) {
-      patch.senderName = senderName;
-      patch.customerName = senderName;
-    }
-    if (recipientName && !String(item.recipientName || '').trim()) patch.recipientName = recipientName;
-    if (recipientPhone && !String(item.recipientPhone || '').trim()) patch.recipientPhone = recipientPhone;
-    const lat = Number(order.pickupLatitude ?? order.pickupLat);
-    const lng = Number(order.pickupLongitude ?? order.pickupLng);
-    if (!hasPickupCoords(item) && Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
-      patch.pickupLatitude = lat;
-      patch.pickupLongitude = lng;
-    }
-    if (order.pickupLabel && !item.pickupLabel) patch.pickupLabel = String(order.pickupLabel).trim();
-    const photos = cargoPhotoList(order);
-    if (photos.length && !cargoPhotoList(item).length) {
-      patch.parcelPhotoUrls = photos.slice(0, 6);
-      patch.parcelPhotoUrl = photos[0];
-    }
+    const patch = partyPatchFromSource(item, snap.data() || {});
     if (!Object.keys(patch).length) return item;
-    Object.assign(item, patch);
-    const idx = state.shipments.findIndex((row) => row.id === item.id);
-    if (idx >= 0) state.shipments[idx] = { ...state.shipments[idx], ...patch };
-    if (state.pendingStages[item.id]) Object.assign(state.pendingStages[item.id], patch);
+    applyPartyPatch(item, patch);
     updateDoc(doc(db, 'carrierShipments', item.id), patch).catch(() => undefined);
     render();
   } catch (error) {
@@ -2334,7 +2359,7 @@ function quoteSeed(item) {
 }
 
 function photoStrip(item) {
-  if (!agentOwns(item)) return '';
+  // Photos are public on the desk brief; phones stay gated until agent Accept.
   void ensureCargoPhotos(item);
   const photos = cargoPhotoList(item);
   if (!photos.length) {
@@ -2371,7 +2396,7 @@ function quotePanel(item, opts = {}) {
   const seedAmount = Math.round(Number(String(seed).replace(/[^\d]/g, '')) || 0);
   return `<form class="quote-form price-quote-panel" data-quote="${esc(item.id)}">
     <div class="ship-row">
-      <label class="ship-figure"><span>Bei</span>
+      <label class="ship-figure"><span>Bei ya usafirishaji</span>
         <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="0" required />
       </label>
       ${commissionMark(seedAmount)}
@@ -2465,15 +2490,14 @@ function placeName(value) {
 }
 
 function arriveCard(item, opts) {
-  const owned = agentOwns(item);
-  if (owned) void ensureCargoPhotos(item);
+  void ensureCargoPhotos(item);
   const open = state.deskOpen === item.id;
   const from = placeName(item.pickupLabel || item.origin);
   const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
-  const photo = owned ? cargoPhotoList(item)[0] : '';
+  const photo = cargoPhotoList(item)[0] || '';
   const thumb = photo
     ? `<button type="button" class="photo-open arrive-thumb-btn" data-photo="${esc(photo)}" aria-label="Fungua picha"><img class="arrive-thumb" src="${esc(photo)}" alt="" referrerpolicy="no-referrer" /></button>`
-    : '';
+    : `<span class="arrive-thumb is-empty" aria-hidden="true">${uiIcon('box')}</span>`;
   return `<article class="arrive-card ${open ? 'is-open' : ''}">
     <div class="arrive-row">
       ${thumb}
@@ -2780,10 +2804,8 @@ function orderPager(count, page, pages) {
 
 function orderBrief(item, opts = {}) {
   const owned = agentOwns(item);
-  if (owned) {
-    void ensureCargoPhotos(item);
-    void ensureAcceptedParty(item);
-  }
+  void ensureCargoPhotos(item);
+  if (owned) void ensureAcceptedParty(item);
   const value = declaredValueOf(item);
   const from = placeName(item.origin || item.pickupLabel);
   const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
@@ -2793,7 +2815,8 @@ function orderBrief(item, opts = {}) {
   const acceptGate = !owned && quoteAccepted(item)
     ? `<div class="accept-gate"><p class="accept-title">Mteja amekubali</p><button class="btn primary" type="button" data-act="accept" data-id="${esc(item.id)}" ${busy ? 'disabled' : ''}>Accept</button></div>`
     : '';
-  const mapBtn = owned && hasPickupCoords(item)
+  // After agent Accept: always offer Maps (coords preferred, pickup label fallback).
+  const mapBtn = owned
     ? `<a class="btn primary map-btn" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Google Maps</a>`
     : '';
   return `<article class="order-brief">
@@ -2832,7 +2855,7 @@ function orderBrief(item, opts = {}) {
     <div class="goods-tile">
       <span class="goods-ico">${uiIcon('box')}</span>
       <div>
-        <span>Thamani</span>
+        <span>Thamani ya bidhaa</span>
         <strong>${value ? esc(money(value)) : '—'}</strong>
       </div>
     </div>
@@ -4252,8 +4275,12 @@ async function onViewClick(event) {
       try {
         const payload = await portalCall(path, body);
         await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
-        const row = rememberAcceptedOrder(id);
-        if (row) void ensureAcceptedParty(row);
+        const party = payload?.party && typeof payload.party === 'object' ? partyPatchFromSource({ id, ...current }, payload.party) : {};
+        const row = rememberAcceptedOrder(id, party);
+        if (row) {
+          if (Object.keys(party).length) applyPartyPatch(row, party);
+          void ensureAcceptedParty(row);
+        }
         showAcceptedOrder(id);
         const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
         if (note) window.alert(note);
