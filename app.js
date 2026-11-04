@@ -3667,6 +3667,32 @@ function payNetworkLabel(key) {
   return map[String(key || '').toLowerCase()] || String(key || 'Mobile money');
 }
 
+function payNetworkProvider(key) {
+  const map = { mpesa: 'Vodacom', mixx: 'Tigo / Yas', airtel: 'Airtel' };
+  return map[String(key || '').toLowerCase()] || '';
+}
+
+/** Normalize TZ mobiles to 255XXXXXXXXX for TrivaPesa. */
+function normalizePayPhone(value) {
+  const digits = String(value || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('255') && digits.length >= 12) return digits.slice(0, 12);
+  if (digits.startsWith('0') && digits.length >= 10) return `255${digits.slice(1, 10)}`;
+  if (digits.length === 9 && /^[67]/.test(digits)) return `255${digits}`;
+  return digits;
+}
+
+function isValidPayPhone(value) {
+  return /^255[67]\d{8}$/.test(normalizePayPhone(value));
+}
+
+function newPayIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().replace(/-/g, '');
+  }
+  return `pay${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function payStatusChip(status) {
   const key = String(status || '').toLowerCase();
   if (key === 'completed' || key === 'success' || key === 'paid') return `<span class="debt-chip ok">Completed</span>`;
@@ -3709,17 +3735,20 @@ function payWaitHint(flow) {
 function openPayFlow(seed = {}) {
   const snap = debtSnapshot();
   const outstanding = Math.max(0, Math.round(Number(seed.amount ?? snap.outstanding) || 0));
+  const rawPhone = String(seed.phone || state.carrier?.commissionPayerPhone || state.carrier?.phone || '');
   state.payFlow = {
     step: seed.step || 'amount',
     mode: seed.mode || 'full',
     amount: outstanding,
-    phone: String(seed.phone || state.carrier?.commissionPayerPhone || state.carrier?.phone || ''),
+    phone: normalizePayPhone(rawPhone) || rawPhone,
     network: String(seed.network || 'mpesa'),
     orderId: seed.orderId || '',
     reference: seed.reference || '',
     status: seed.status || '',
     message: seed.message || '',
     unpaidBefore: outstanding,
+    idempotencyKey: seed.idempotencyKey || '',
+    pollTicks: Number(seed.pollTicks) || 0,
   };
   render();
 }
@@ -3766,14 +3795,20 @@ function payFlowSheet(snap) {
     body = `<div class="debt-step">
       <h3>Payment method</h3>
       <p class="muted">USSD push via TrivaPesa — approve on the phone.</p>
-      <div class="debt-networks">
+      <div class="debt-networks" role="radiogroup" aria-label="Payment network">
         ${[['mpesa', 'M-Pesa'], ['mixx', 'Mixx by Yas'], ['airtel', 'Airtel Money']].map(([key, label]) => `
-          <button type="button" class="debt-network ${flow.network === key ? 'is-on' : ''}" data-pay="network" data-network="${key}">
-            <strong>${label}</strong>
+          <button type="button" class="debt-network ${flow.network === key ? 'is-on' : ''}" data-pay="network" data-network="${key}" role="radio" aria-checked="${flow.network === key ? 'true' : 'false'}">
+            <span class="debt-network-logo debt-network-logo--${key}" aria-hidden="true">
+              <img src="./assets/payments/${key}.png" alt="" width="72" height="40" loading="lazy" />
+            </span>
+            <span class="debt-network-copy">
+              <strong>${label}</strong>
+              <span>${esc(payNetworkProvider(key))}</span>
+            </span>
           </button>`).join('')}
       </div>
       <label class="debt-field"><span>Payer phone</span>
-        <input id="payPhoneInput" type="tel" inputmode="tel" placeholder="07…" value="${esc(flow.phone)}" />
+        <input id="payPhoneInput" type="tel" inputmode="tel" placeholder="07XXXXXXXX or 2557XXXXXXXX" value="${esc(flow.phone)}" />
       </label>
       <div class="debt-sheet-actions">
         <button class="btn line" type="button" data-pay="back-amount">Back</button>
@@ -4000,33 +4035,73 @@ function printPaymentReceipt(paymentId) {
   win.document.close();
 }
 
+async function postCommissionUssd(body, { attempt = 1 } = {}) {
+  const token = await state.user.getIdToken();
+  let response;
+  try {
+    response = await fetch(`${apiBase()}/carrier/commission/ussd`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(35000),
+    });
+  } catch (error) {
+    const transient = /timeout|aborted|AbortError|network|Failed to fetch/i.test(String(error?.name || error?.message || ''));
+    if (attempt < 2 && transient) {
+      return postCommissionUssd(body, { attempt: attempt + 1 });
+    }
+    throw Object.assign(new Error('USSD haijatumwa. Jaribu tena.'), { statusCode: 0, retryable: true });
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload.error || payload.message || 'USSD haijatumwa. Jaribu tena.';
+    const retryable = response.status >= 500 || response.status === 429 || response.status === 408;
+    if (attempt < 2 && retryable) {
+      return postCommissionUssd(body, { attempt: attempt + 1 });
+    }
+    throw Object.assign(new Error(message), { payload, statusCode: response.status, retryable });
+  }
+  return payload;
+}
+
 async function initiateDebtPayment() {
   const flow = state.payFlow;
   if (!flow || state.payBusy) return;
   const snap = debtSnapshot();
   const amount = Math.round(Number(flow.amount) || 0);
-  const phone = String(flow.phone || '').trim();
+  const phone = normalizePayPhone(flow.phone);
   const network = String(flow.network || '').trim().toLowerCase();
   if (amount < 100) throw new Error('Minimum payment is TSh 100.');
   if (amount > snap.outstanding) throw new Error('Amount cannot exceed outstanding balance.');
-  if (!phone) throw new Error('Enter the payer phone number.');
+  if (!isValidPayPhone(phone)) throw new Error('Weka namba sahihi ya simu.');
+  if (!['mpesa', 'mixx', 'airtel'].includes(network)) throw new Error('Mtandao huu haupo.');
+  if (!flow.idempotencyKey) flow.idempotencyKey = newPayIdempotencyKey();
+  flow.phone = phone;
   state.payBusy = true;
   render();
   try {
-    const token = await state.user.getIdToken();
-    const response = await fetch(`${apiBase()}/carrier/commission/ussd`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount, phoneNumber: phone, network }),
+    const unpaidOrders = (snap.unpaidOrders || []).map((row) => String(row.item?.id || '')).filter(Boolean).slice(0, 40);
+    const payload = await postCommissionUssd({
+      amount,
+      phoneNumber: phone,
+      network,
+      method: network,
+      carrierId: state.carrier?.id || undefined,
+      shipmentIds: unpaidOrders,
+      idempotencyKey: flow.idempotencyKey,
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw Object.assign(new Error(payload.error || payload.message || 'USSD haijatumwa. Jaribu tena.'), {
-        payload,
-      });
-    }
-    flow.orderId = payload.orderId || '';
-    flow.reference = payload.trivapesaReference || payload.reference || flow.orderId;
+    const orderId = String(payload.orderId || '').trim();
+    const reference = String(payload.trivapesaReference || payload.reference || '').trim();
+    // Only advance when the API accepted an order. Prefer an explicit push/reference; allow duplicate pending without ref while a create is in flight.
+    const accepted =
+      Boolean(orderId) &&
+      (payload.pushed === true ||
+        Boolean(reference) ||
+        payload.duplicate === true ||
+        payload.status === 'pending' ||
+        (payload.status === 'completed' && payload.settled));
+    flow.orderId = orderId;
+    flow.reference = reference;
     flow.message = payload.message || 'Subiri uthibitisho kwenye simu.';
     flow.amount = Math.round(Number(payload.amount) || amount);
     flow.pollTicks = 0;
@@ -4040,6 +4115,7 @@ async function initiateDebtPayment() {
           amount: flow.amount,
           network,
           payerPhone: phone,
+          trivapesaReference: reference || undefined,
           createdAtMs: Date.now(),
         },
       };
@@ -4048,33 +4124,56 @@ async function initiateDebtPayment() {
       flow.step = 'result';
       flow.status = 'completed';
       flow.message = 'Malipo yamefanikiwa. Commission imethibitishwa.';
-      flow.reference = payload.reference || flow.reference || flow.orderId;
+      flow.reference = reference || flow.orderId;
       state.payBusy = false;
       await refreshFinanceSnapshot(true);
       render();
       return;
     }
     if (payload.status === 'failed') {
-      flow.step = 'result';
-      flow.status = 'failed';
-      flow.message = mapPayOutcomeMessage(payload, 'Malipo yameshindikana.');
+      const failMsg = mapPayOutcomeMessage(payload, 'Malipo yameshindikana.');
+      flow.idempotencyKey = '';
       state.payBusy = false;
+      showToast(failMsg);
+      flow.step = 'summary';
+      flow.status = 'failed';
+      flow.message = failMsg;
+      render();
+      return;
+    }
+    if (!accepted) {
+      const failMsg = payload.message || payload.error || 'USSD haijatumwa. Jaribu tena.';
+      flow.idempotencyKey = '';
+      state.payBusy = false;
+      showToast(failMsg);
+      flow.step = 'summary';
+      flow.status = '';
+      flow.message = failMsg;
       render();
       return;
     }
     flow.step = 'confirm';
     flow.status = 'pending';
+    flow.message =
+      payload.pushed === true || reference
+        ? 'USSD imetumwa. Thibitisha kwenye simu.'
+        : payload.message || 'Subiri uthibitisho kwenye simu.';
     state.payBusy = false;
     render();
+    showToast(flow.message);
     pollDebtPayment(flow.orderId);
   } catch (error) {
     state.payBusy = false;
-    flow.step = 'result';
-    flow.status = 'failed';
-    flow.message = mapPayOutcomeMessage(
+    const failMsg = mapPayOutcomeMessage(
       error?.payload || { message: error?.message, error: error?.message },
-      error?.message || 'Malipo yameshindikana.'
+      error?.message || 'USSD haijatumwa. Jaribu tena.'
     );
+    // Keep the same idempotency key so a manual retry cannot double-push after a transient failure.
+    if (!error?.retryable) flow.idempotencyKey = '';
+    showToast(failMsg);
+    flow.step = 'summary';
+    flow.status = '';
+    flow.message = failMsg;
     render();
   }
 }
@@ -4143,13 +4242,15 @@ function pollDebtPayment(orderId) {
       debtPollTimer = null;
       return;
     }
-    if (ticks > 30) {
+    // ~3 minutes of quiet polling before asking the agent to retry / check manually.
+    if (ticks > 60) {
       clearInterval(debtPollTimer);
       debtPollTimer = null;
       if (state.payFlow && state.payFlow.step !== 'result') {
-        state.payFlow.step = 'result';
-        state.payFlow.status = 'failed';
-        state.payFlow.message = 'Muda umeisha, jaribu tena.';
+        state.payFlow.step = 'confirm';
+        state.payFlow.status = 'pending';
+        state.payFlow.message = 'Bado hakuna uthibitisho. Angalia hali au jaribu tena ikiwa USSD haikufika.';
+        showToast(state.payFlow.message);
         render();
       }
       return;
@@ -4246,11 +4347,12 @@ async function handleDebtPayClick(event) {
   if (act === 'to-summary') {
     if (!state.payFlow) return true;
     const phone = document.getElementById('payPhoneInput');
-    state.payFlow.phone = String(phone?.value || state.payFlow.phone || '').trim();
-    if (!state.payFlow.phone) {
-      showToast('Enter the payer phone number.');
+    const normalized = normalizePayPhone(phone?.value || state.payFlow.phone || '');
+    if (!isValidPayPhone(normalized)) {
+      showToast('Weka namba sahihi ya simu (07… au 255…).');
       return true;
     }
+    state.payFlow.phone = normalized;
     state.payFlow.step = 'summary';
     render();
     return true;
@@ -4258,15 +4360,26 @@ async function handleDebtPayClick(event) {
   if (act === 'back-method') {
     if (!state.payFlow) return true;
     state.payFlow.step = 'method';
+    state.payFlow.idempotencyKey = '';
     render();
     return true;
   }
   if (act === 'confirm') {
+    if (state.payBusy) return true;
     try {
       await initiateDebtPayment();
     } catch (error) {
-      showToast(error?.message || 'Payment failed.');
+      showToast(error?.message || 'USSD haijatumwa. Jaribu tena.');
     }
+    return true;
+  }
+  if (act === 'retry') {
+    openPayFlow({
+      amount: snap.outstanding,
+      mode: 'full',
+      phone: state.payFlow?.phone,
+      network: state.payFlow?.network || 'mpesa',
+    });
     return true;
   }
   if (act === 'verify') {
@@ -4275,10 +4388,6 @@ async function handleDebtPayClick(event) {
     } catch (error) {
       showToast(error?.message || 'Could not verify payment.');
     }
-    return true;
-  }
-  if (act === 'retry') {
-    openPayFlow({ amount: snap.outstanding, mode: 'full' });
     return true;
   }
   if (act === 'receipt') {
