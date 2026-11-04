@@ -2954,3 +2954,93 @@ body:has(#app:not(.hidden)) {
 @media (max-width: 700px) {
   #app .money-pair { grid-template-columns: 1fr; }
 }
+
+#app .order-stack { display: grid; gap: 18px; }
+#app .order-brief {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 22px 22px 16px;
+  display: grid;
+  gap: 16px;
+}
+#app .brief-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+#app .brief-kicker {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 650;
+}
+#app .brief-top h2 {
+  margin: 4px 0 0;
+  font-family: var(--font-display, "Syne", sans-serif);
+  font-size: 28px;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+}
+#app .brief-route {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: end;
+}
+#app .brief-route span,
+#app .brief-parties span,
+#app .brief-goods span {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 650;
+}
+#app .brief-route strong { display: block; margin-top: 4px; font-size: 20px; letter-spacing: -0.03em; line-height: 1.25; }
+#app .brief-route i { font-style: normal; color: var(--haul, #14532d); font-size: 22px; }
+#app .order-brief .mzigo-photo-block { border: 0; background: transparent; padding: 0; margin: 0; }
+#app .brief-parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+#app .brief-parties strong { display: block; margin-top: 4px; font-size: 17px; }
+#app .brief-parties p, #app .brief-note, #app .brief-wait, #app .brief-lock { margin: 2px 0 0; color: #3f3f3a; font-size: 14px; line-height: 1.4; }
+#app .brief-lock, #app .brief-note, #app .brief-wait { color: var(--muted); }
+#app .brief-goods {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+#app .brief-goods strong { font-size: 22px; letter-spacing: -0.03em; }
+#app .order-brief .price-quote-panel { border: 0; background: transparent; padding: 8px 0 0; margin: 0; box-shadow: none; }
+#app .order-list { display: grid; }
+#app .order-line {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 12px 2px;
+  min-height: 0;
+}
+#app .order-line small { display: block; color: var(--muted); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+#app .order-line-route { display: grid; min-width: 0; }
+#app .order-line-route em { font-style: normal; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .order-list-item.is-open { padding-bottom: 14px; }
+@media (max-width: 800px) {
+  #app .brief-route, #app .brief-parties { grid-template-columns: 1fr; }
+  #app .brief-route i { display: none; }
+  #app .order-line { grid-template-columns: 48px 1fr; }
+}

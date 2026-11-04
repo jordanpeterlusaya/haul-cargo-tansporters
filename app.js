@@ -304,14 +304,14 @@ function renderCargoPhotos(item) {
   const photos = cargoPhotoList(item);
   if (!photos.length) {
     return `<section class="mzigo-photo-block missing" data-photo-ship="${esc(item.id)}">
-      <p class="mzigo-photo-label">Picha ya mzigo</p>
+      <p class="mzigo-photo-label">Picha za mzigo</p>
       <p class="mzigo-photo-empty">Inatafutwa picha… kama haionekani, fungua oda tena.</p>
     </section>`;
   }
   const main = photos[0];
   const thumbs = photos.slice(1);
   return `<section class="mzigo-photo-block" data-photo-ship="${esc(item.id)}">
-    <p class="mzigo-photo-label">Picha ya mzigo</p>
+    <p class="mzigo-photo-label">Picha za mzigo</p>
     <a class="mzigo-photo-hero" href="${esc(main)}" target="_blank" rel="noopener">
       <img src="${esc(main)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="eager" />
     </a>
@@ -404,7 +404,7 @@ function moneyPairCell(item) {
   const cargoValue = declaredValueOf(item);
   const shippingFee = priceOf(item);
   return `<div class="money-pair">
-    <div><span>Thamani ya mzigo</span><strong>${cargoValue ? esc(money(cargoValue)) : '—'}</strong></div>
+    <div><span>Thamani ya bidhaa</span><strong>${cargoValue ? esc(money(cargoValue)) : '—'}</strong></div>
     <div><span>Bei ya usafirishaji</span><strong>${shippingFee > 0 ? esc(money(shippingFee)) : 'Bado haijawekwa'}</strong></div>
   </div>`;
 }
@@ -415,16 +415,15 @@ function orderFacts(item) {
   const value = declaredValueOf(item);
   const shippingFee = priceOf(item);
   const schedule = item.routeLabel || (route ? `${route.origin} → ${route.destination}` : '');
-  const authorized = item.carrierId === state.carrier?.id || (item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id);
   return `${renderCargoPhotos(item)}<dl class="facts">
     <div><dt>Uzito</dt><dd>${esc(item.weightKg || 0)} kg${item.parcelDescription ? ` · ${esc(item.parcelDescription)}` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</dd></div>
     <div><dt>Pickup</dt><dd>${esc(item.pickupLabel || item.origin || '—')}</dd></div>
     <div><dt>Marudio</dt><dd>${esc(item.destination || item.dropoffLabel || item.routeLabel || '—')}</dd></div>
-    <div><dt>Mtumaji</dt><dd>${authorized ? esc(item.customerName || '—') : 'Baada ya kuchukua oda'}</dd></div>
-    <div><dt>Mpokeaji</dt><dd>${authorized ? esc(item.recipientName || '—') : 'Baada ya kuchukua oda'}</dd></div>
-    <div><dt>Simu mtumaji</dt><dd>${authorized ? phoneLine(item.customerPhone) : '—'}</dd></div>
-    <div><dt>Simu mpokeaji</dt><dd>${authorized ? phoneLine(item.recipientPhone) : '—'}</dd></div>
-    <div><dt>Thamani ya mzigo</dt><dd>${value ? esc(money(value)) : 'Haijatajwa'}</dd></div>
+    <div><dt>Mtumaji</dt><dd>${esc(item.senderName || item.customerName || '—')}</dd></div>
+    <div><dt>Mpokeaji</dt><dd>${esc(item.recipientName || '—')}</dd></div>
+    <div><dt>Simu mtumaji</dt><dd>${quotePending(item) ? 'Baada ya mteja kukubali' : phoneLine(item.senderPhone || item.customerPhone)}</dd></div>
+    <div><dt>Simu mpokeaji</dt><dd>${quotePending(item) ? 'Baada ya mteja kukubali' : phoneLine(item.recipientPhone)}</dd></div>
+    <div><dt>Thamani ya bidhaa</dt><dd>${value ? esc(money(value)) : 'Haijatajwa'}</dd></div>
     <div><dt>Bei ya usafirishaji</dt><dd>${shippingFee > 0 ? money(shippingFee) : 'Bado haijawekwa'}</dd></div>
     <div><dt>Safari</dt><dd>${esc(schedule || '—')}</dd></div>
   </dl>
@@ -438,11 +437,35 @@ function cashOf(order) {
   if (match) return Math.round(Number(match[1]));
   return Math.round(Number(order.customerOffer || 0));
 }
+function shippingFeeOf(item) {
+  // Agent shipping quote only. declaredValueTzs is goods value and must never fill this.
+  const declared = declaredValueOf(item);
+  const status = String(item?.quoteStatus || '').trim();
+  const explicit = Math.round(Number(item?.carrierQuoteTzs || item?.shippingFeeTzs) || 0);
+  const agentQuoted = status === 'offered' || status === 'confirmed' || item?.customerAcceptedQuote === true || Boolean(item?.quotedAt);
+  if (agentQuoted) {
+    if (explicit > 0) return explicit;
+    const cash = Math.round(Number(item?.cashExpected) || 0);
+    return cash > 0 ? cash : 0;
+  }
+  if (status === 'awaiting_company') return 0;
+  if (explicit > 0 && explicit !== declared) return explicit;
+  const cash = Math.round(Number(item?.cashExpected) || 0);
+  if (cash > 0 && cash !== declared) return cash;
+  const source = `${item?.totalLabel || ''} ${item?.fareLabel || ''}`.replace(/,/g, '');
+  if (/baada|awaiting|kampuni|quote/i.test(source)) return 0;
+  const match = source.match(/(\d+(?:\.\d+)?)/);
+  if (!match) return 0;
+  const parsed = Math.round(Number(match[1]));
+  return parsed > 0 && parsed !== declared ? parsed : 0;
+}
 function priceOf(item) {
-  // Shipping fee only — never treat customer-declared cargo value as the fare.
-  const quoted = Number(item?.carrierQuoteTzs ?? item?.shippingFeeTzs ?? item?.cashExpected);
-  if (Number.isFinite(quoted) && quoted > 0) return Math.round(quoted);
-  return cashOf(item);
+  return shippingFeeOf(item);
+}
+function quoteAccepted(item) {
+  if (!item) return false;
+  if (item.customerAcceptedQuote === true) return true;
+  return String(item.quoteStatus || '').trim() === 'confirmed';
 }
 function ownedRows() {
   const id = state.carrier?.id;
@@ -1411,7 +1434,7 @@ function shipmentRows(rows) {
     <tbody>${rows.map((item) => `<tr>
       <td><a href="#/assignment/${esc(item.id)}"><strong>${esc(item.orderNumber || item.id.slice(0, 6))}</strong></a></td>
       <td>${esc(item.routeLabel || item.destination || '—')}</td>
-      <td>${esc(item.customerName || '—')}<br><span class="muted">${esc(item.customerPhone || '')}</span></td>
+      <td>${esc(item.customerName || '—')}${quotePending(item) ? '' : `<br><span class="muted">${esc(item.customerPhone || '')}</span>`}</td>
       <td>${money(item.cashExpected)}</td>
       <td>${stageBadge(item)}</td>
     </tr>`).join('')}</tbody></table></div>`;
@@ -1520,29 +1543,11 @@ function statusUploadPanel(item) {
 }
 
 function offerHeroCard(item) {
-  const dest = dropOffLabel(item);
-  const kg = item.weightKg || 0;
-  const value = declaredValueOf(item);
-  return `<section class="panel offer-panel">
-    <p class="offer-route">${esc(dest)}</p>
-    <p class="offer-meta">${esc(kg)} kg · ${money(priceOf(item))}${value ? ` · thamani ${money(value)}` : ''}</p>
-    ${offerCountdownBlock(item)}
-    <div class="actions">
-      <button class="btn primary" data-act="accept" data-id="${esc(item.id)}" type="button">Kubali</button>
-      <button class="btn line" data-act="reject" data-id="${esc(item.id)}" type="button">Kataa</button>
-    </div>
-  </section>`;
+  return orderBrief(item, { forceQuote: true });
 }
 
 function activeJobCard(item) {
-  const dest = dropOffLabel(item);
-  const value = declaredValueOf(item);
-  const next = deskNextActionBlock(item);
-  return `<section class="panel desk-job">
-    <p class="offer-route">${esc(dest)}</p>
-    <p class="offer-meta">${esc(item.weightKg || 0)} kg · ${money(priceOf(item))}${value ? ` · thamani ${money(value)}` : ''}</p>
-    <div class="actions desk-next">${next || '<p class="muted">Hakuna hatua inayofuata.</p>'}</div>
-  </section>`;
+  return orderBrief(item, { forceQuote: true });
 }
 
 function timeMs(value) {
@@ -2000,7 +2005,7 @@ function ordersTable(rows, showAccept) {
   return `<div class="table-wrap orders-table-card"><table class="ops-table">
     <thead><tr>
       <th></th><th>Order</th><th>Customer</th><th>Route</th><th>Cargo</th>
-      <th>Thamani ya mzigo</th><th>Bei ya usafirishaji</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
+      <th>Thamani ya bidhaa</th><th>Bei ya usafirishaji</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
     </tr></thead>
     <tbody>${rows.map((item) => {
       const fee = commissionParts(item);
@@ -2010,7 +2015,7 @@ function ordersTable(rows, showAccept) {
       return `<tr>
         <td>${photoThumb(item)}</td>
         <td><strong class="order-id">${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
-        <td>${esc(item.customerName || '—')}<div class="cell-sub">${esc(item.customerPhone || '')}</div></td>
+        <td>${esc(item.customerName || '—')}${quotePending(item) ? '' : `<div class="cell-sub">${esc(item.customerPhone || '')}</div>`}</td>
         <td>${esc(item.pickupLabel || item.origin || '—')}<div class="cell-sub">${esc(item.destination || item.dropoffLabel || '—')}</div></td>
         <td>${esc(item.parcelDescription || item.cargoDescription || 'Cargo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}</td>
         <td>${cargoValue ? money(cargoValue) : '—'}</td>
@@ -2042,6 +2047,16 @@ function orderBucket(item) {
   if (item.carrierId === mineId) return 'verified';
   if (status === 'assigned' && item.offeredCarrierId === mineId) return 'new';
   return '';
+}
+
+function quotePending(item) {
+  if (!item || quoteAccepted(item)) return false;
+  const qs = String(item.quoteStatus || '').trim();
+  if (qs === 'declined') return false;
+  const status = String(item.shipmentStatus || '');
+  if (['in_transit', 'arrived', 'delivered', 'cancelled'].includes(status)) return false;
+  if (qs === 'awaiting_company' || qs === 'offered') return true;
+  return orderBucket(item) === 'new' && shippingFeeOf(item) <= 0;
 }
 
 function stageBadge(item) {
@@ -2106,7 +2121,7 @@ function quotePanel(item, opts = {}) {
   const force = Boolean(opts.force) || needsCustomerPrice(item);
   const editing = Boolean(opts.editing) || state.editingQuoteId === item.id;
   const cargoValue = declaredValueOf(item);
-  const cargoNote = `<p class="muted quote-hint">Thamani ya mzigo (${cargoValue ? money(cargoValue) : '—'}) ni ya mteja — haisiingizwi kama bei ya usafirishaji.</p>`;
+  const cargoNote = `<p class="muted quote-hint">Thamani ya bidhaa (${cargoValue ? money(cargoValue) : '—'}) si bei ya usafirishaji.</p>`;
 
   if (qs === 'confirmed' && priceOf(item) > 0 && !editing) {
     const fee = Math.round(Number(item.haulFee) || 0);
@@ -2179,6 +2194,7 @@ function stageTracker(item) {
 }
 
 function stageAction(item) {
+  if (quotePending(item)) return '';
   const bucket = orderBucket(item);
   if (!bucket || bucket === 'cancelled') return '';
   const id = esc(item.id);
@@ -2255,59 +2271,29 @@ function ordersDesk(tab) {
     const count = state.shipments.filter((item) => orderBucket(item) === key).length;
     return `<a class="order-tab ${key === current ? 'on' : ''}" href="#/orders/${key}"><span>${label}</span><em>${count}</em></a>`;
   }).join('');
-  const body = slice.length
-    ? `<div class="table-wrap orders-table-card"><table class="ops-table">
-        <thead><tr>
-          <th></th><th>Order</th><th>Customer</th><th>Route</th><th>Cargo</th>
-          <th>Thamani ya mzigo</th><th>Bei ya usafirishaji</th><th>Commission</th><th>Received</th><th>Status</th><th></th>
-        </tr></thead>
-        <tbody>${slice.map((item) => {
-          const fee = commissionParts(item);
+  const briefOpts = { forceQuote: current === 'new' || current === 'verified' };
+  const body = !slice.length
+    ? `<p class="empty">${query || fromMs || toMs ? 'Hakuna oda inayolingana na utafutaji.' : 'Hakuna oda katika hatua hii.'}</p>`
+    : current === 'new'
+      ? `<div class="order-stack">${slice.map((item) => orderBrief(item, briefOpts)).join('')}</div>${orderPager(rows.length, page, pages)}`
+      : `<div class="order-list">${slice.map((item) => {
           const open = state.deskOpen === item.id;
-          const latest = item.latestJourney || {};
           const cargoValue = declaredValueOf(item);
           const shippingFee = priceOf(item);
-          return `<tr class="${open ? 'is-open' : ''}">
-            <td>${photoThumb(item)}</td>
-            <td><strong class="order-id">${esc(item.orderNumber || item.id.slice(0, 8))}</strong></td>
-            <td>${esc(item.customerName || '—')}<div class="cell-sub">${esc(item.customerPhone || '')}</div></td>
-            <td>${esc(item.pickupLabel || item.origin || '—')}<div class="cell-sub">${esc(dropOffLabel(item))}</div></td>
-            <td>${esc(item.parcelDescription || 'Cargo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</td>
-            <td>${cargoValue ? money(cargoValue) : '—'}</td>
-            <td>${shippingFee > 0 ? money(shippingFee) : '—'}</td>
-            <td>${fee.recorded ? money(fee.fee) : '—'}${fee.outstanding ? `<div class="cell-sub">due ${money(fee.outstanding)}</div>` : ''}</td>
-            <td>${esc(when(item.offeredAt || item.createdAt || item.acceptedAt))}</td>
-            <td>${stageBadge(item)}</td>
-            <td class="actions">${stageButton(item)}<button class="btn line small" type="button" data-desk="open" data-id="${esc(item.id)}">${open ? 'Hide' : 'Details'}</button></td>
-          </tr>
-          ${open ? `<tr class="desk-detail"><td colspan="11">
-            <div class="desk-detail-grid">
-              <div class="order-media">${renderCargoPhotos(item)}</div>
-              <div>
-                ${orderPipeline(item)}
-                ${lifecycleList(item)}
-                ${moneyPairCell(item)}
-                <p class="order-latest">Company · ${esc(item.carrierCompanyName || state.carrier?.companyName || '—')}</p>
-                <p class="order-latest">Latest · ${esc(latest.message || latest.status || 'No update yet')}${latest.at ? ` · ${esc(when(latest.at))}` : ''}</p>
-                ${quotePanel(item, { force: current === 'new' || current === 'verified' || isOutsideCompanyJob(item) })}
-                ${statusUploadPanel(item)}
-                <div class="actions map-actions">
-                  <a class="btn dark small" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Open Google Maps</a>
-                  ${orderActions(item)}
-                  <a class="btn line small" href="#/assignment/${esc(item.id)}">Full record</a>
-                </div>
-              </div>
-            </div>
-          </td></tr>` : ''}`;
-        }).join('')}</tbody></table></div>
-        <div class="pager">
-          <span>${rows.length} orders · page ${page} of ${pages}</span>
-          <div>
-            <button class="btn line small" type="button" data-desk="page" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>Previous</button>
-            <button class="btn line small" type="button" data-desk="page" data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>Next</button>
-          </div>
-        </div>`
-    : `<p class="empty">${query || fromMs || toMs ? 'Hakuna oda inayolingana na utafutaji.' : 'Hakuna oda katika hatua hii.'}</p>`;
+          return `<div class="order-list-item ${open ? 'is-open' : ''}">
+            <button class="order-line" type="button" data-desk="open" data-id="${esc(item.id)}">
+              ${photoThumb(item)}
+              <span class="order-line-route">
+                <strong>${esc(item.orderNumber || item.id.slice(0, 8))}</strong>
+                <em>${esc(item.pickupLabel || item.origin || '—')} → ${esc(dropOffLabel(item))}</em>
+              </span>
+              <span><small>Thamani ya bidhaa</small>${cargoValue ? money(cargoValue) : '—'}</span>
+              <span><small>Bei ya usafirishaji</small>${shippingFee > 0 ? money(shippingFee) : 'Bado'}</span>
+              ${stageBadge(item)}
+            </button>
+            ${open ? orderBrief(item, briefOpts) : ''}
+          </div>`;
+        }).join('')}</div>${orderPager(rows.length, page, pages)}`;
   return `<div class="order-desk mute-desk">
     <div class="desk-tools">
       <input id="deskSearch" type="search" placeholder="Search order, customer, phone, route" value="${esc(state.deskQuery || '')}" />
@@ -2336,9 +2322,13 @@ async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
     const sent = state.shipments.find((item) => item.id === shipmentId);
     if (sent) {
       sent.quoteStatus = 'offered';
+      sent.customerAcceptedQuote = false;
       sent.cashExpected = amount;
+      sent.carrierQuoteTzs = amount;
+      sent.shippingFeeTzs = amount;
       sent.quoteDraftCommissionTzs = draftCommission;
       sent.fareLabel = label;
+      sent.quotedAt = new Date().toISOString();
     }
     return;
   } catch (error) {
@@ -2352,6 +2342,9 @@ async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
   // Draft only — haulFee / commission counts when the company accepts the order.
   await updateDoc(doc(db, 'carrierShipments', shipmentId), {
     cashExpected: amount,
+    carrierQuoteTzs: amount,
+    shippingFeeTzs: amount,
+    customerAcceptedQuote: false,
     quoteDraftCommissionTzs: draftCommission,
     quoteDraftFeeRate: rate,
     quoteStatus: 'offered',
@@ -2371,9 +2364,13 @@ async function sendCompanyQuote(shipmentId, amount, commissionTzs) {
   const sent = state.shipments.find((item) => item.id === shipmentId);
   if (sent) {
     sent.quoteStatus = 'offered';
+    sent.customerAcceptedQuote = false;
     sent.cashExpected = amount;
+    sent.carrierQuoteTzs = amount;
+    sent.shippingFeeTzs = amount;
     sent.quoteDraftCommissionTzs = draftCommission;
     sent.fareLabel = label;
+    sent.quotedAt = new Date().toISOString();
   }
 }
 
@@ -2506,18 +2503,80 @@ function transitOrdersPage() {
   return `<section class="panel"><div class="section-head"><h2>In Transit</h2><span class="muted">On the road only</span></div>${ordersTable(rows, false)}</section>`;
 }
 
-function orderBrief(item) {
+function whatsappOrderText(item) {
   return [
     `HAUL cargo · ${item.orderNumber || item.id.slice(0, 8)}`,
-    `Pickup: ${item.pickupLabel || item.origin || '—'}`,
-    `Destination: ${item.destination || item.dropoffLabel || '—'}`,
-    `Cargo: ${item.parcelDescription || 'Cargo'}${item.weightKg ? ` · ${item.weightKg} kg` : ''}`,
-    `Price: ${money(priceOf(item))}`,
+    `Inatoka: ${item.pickupLabel || item.origin || '—'}`,
+    `Inaenda: ${item.destination || item.dropoffLabel || '—'}`,
+    `Mzigo: ${item.parcelDescription || 'Cargo'}${item.weightKg ? ` · ${item.weightKg} kg` : ''}`,
+    `Bei ya usafirishaji: ${priceOf(item) > 0 ? money(priceOf(item)) : 'Bado'}`,
+    `Thamani ya bidhaa: ${declaredValueOf(item) ? money(declaredValueOf(item)) : '—'}`,
     item.pickupLatitude && item.pickupLongitude
       ? `Map: https://www.google.com/maps/dir/?api=1&destination=${item.pickupLatitude},${item.pickupLongitude}`
       : `Map: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.pickupLabel || item.destination || 'Dar es Salaam')}`,
     `Details: ${location.origin}${location.pathname}#/assignment/${item.id}`,
   ].join('\n');
+}
+
+function orderPager(count, page, pages) {
+  return `<div class="pager">
+    <span>${count} orders · page ${page} of ${pages}</span>
+    <div>
+      <button class="btn line small" type="button" data-desk="page" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>Previous</button>
+      <button class="btn line small" type="button" data-desk="page" data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>Next</button>
+    </div>
+  </div>`;
+}
+
+function orderBrief(item, opts = {}) {
+  void ensureCargoPhotos(item);
+  const pending = quotePending(item);
+  const value = declaredValueOf(item);
+  const fee = priceOf(item);
+  const from = item.pickupLabel || item.origin || '—';
+  const to = item.recipientAddress || item.dropoffLabel || item.destination || item.outsideDestinationLabel || '—';
+  const phoneBlock = (phone) => pending
+    ? '<p class="brief-lock">Simu baada ya mteja kukubali bei</p>'
+    : `<p class="brief-phone">${phoneLine(phone)}</p>`;
+  return `<article class="order-brief">
+    <header class="brief-top">
+      <div>
+        <p class="brief-kicker">${pending ? 'Oda mpya' : 'HAUL'}</p>
+        <h2>${esc(item.orderNumber || item.id.slice(0, 8))}</h2>
+      </div>
+      ${stageBadge(item)}
+    </header>
+    <div class="brief-route">
+      <div><span>Inatoka wapi</span><strong>${esc(from)}</strong></div>
+      <i aria-hidden="true">→</i>
+      <div><span>Inaenda wapi</span><strong>${esc(to)}</strong></div>
+    </div>
+    ${renderCargoPhotos(item)}
+    <div class="brief-parties">
+      <div>
+        <span>Mtumaji</span>
+        <strong>${esc(item.senderName || item.customerName || '—')}</strong>
+        <p>${esc(from)}</p>
+        ${phoneBlock(item.senderPhone || item.customerPhone)}
+      </div>
+      <div>
+        <span>Mpokeaji</span>
+        <strong>${esc(item.recipientName || '—')}</strong>
+        <p>${esc(item.recipientAddress || item.dropoffLabel || item.destination || '—')}</p>
+        ${phoneBlock(item.recipientPhone)}
+      </div>
+    </div>
+    <p class="brief-goods"><span>Thamani ya bidhaa</span><strong>${value ? esc(money(value)) : 'Haijatajwa'}</strong></p>
+    <p class="brief-note">Hii si bei ya usafirishaji.${fee > 0 ? ` Bei ya usafirishaji ${esc(money(fee))}.` : ''}</p>
+    <p class="brief-note">${esc(item.parcelDescription || 'Mzigo')}${item.weightKg ? ` · ${esc(item.weightKg)} kg` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</p>
+    ${quotePanel(item, { force: Boolean(opts.forceQuote) })}
+    ${pending ? '<p class="brief-wait">Hali ya oda na nambari za simu zitaonekana mteja akishakubali bei ya usafirishaji.</p>' : statusUploadPanel(item)}
+    <div class="actions map-actions">
+      <a class="btn dark small" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Open Google Maps</a>
+      ${opts.full && item.carrierId === state.carrier?.id ? `<a class="btn line small" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
+      ${opts.full ? '' : `<a class="btn line small" href="#/assignment/${esc(item.id)}">Fungua</a>`}
+    </div>
+  </article>`;
 }
 
 function whatsappHref(phone, text) {
@@ -2754,26 +2813,7 @@ function trackerBlock(item) {
 function assignmentPage(id) {
   const item = state.shipments.find((shipment) => shipment.id === id);
   if (!item || !mine(item)) return '<p class="empty">This order is not available on your account.</p>';
-  const owned = item.carrierId === state.carrier?.id;
-  const pickupMap = pickupMapUrl(item);
-  const destMap = item.dropoffLatitude && item.dropoffLongitude
-    ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(`${item.pickupLatitude || ''},${item.pickupLongitude || ''}`)}&destination=${item.dropoffLatitude},${item.dropoffLongitude}`
-    : pickupMap;
-  void ensureCargoPhotos(item);
-  return `<section class="panel">
-    <p class="offer-route">${esc(item.orderNumber || item.id.slice(0, 8))} · ${esc(item.destination || item.routeLabel || 'Cargo')}</p>
-    <p class="muted">${stageBadge(item)}</p>
-    ${moneyPairCell(item)}
-    ${quotePanel(item, { force: true })}
-    ${statusUploadPanel(item)}
-    ${renderCargoPhotos(item)}
-    ${orderFacts(item)}
-    <div class="actions map-actions" style="margin-top:14px">
-      ${owned ? `<a class="btn line" href="#/sticker/${esc(item.id)}">Print receipt</a>` : ''}
-      <a class="btn dark" href="${esc(pickupMap)}" target="_blank" rel="noopener">Open Google Maps</a>
-      <a class="btn line" href="${esc(destMap)}" target="_blank" rel="noopener">Directions</a>
-    </div>
-  </section>`;
+  return orderBrief(item, { forceQuote: true, full: true });
 }
 
 function stickerPage(id) {
@@ -2800,18 +2840,18 @@ function stickerPage(id) {
         <section>
           <span>Kutoka</span>
           <strong>${esc(item.customerName || '—')}</strong>
-          <p>${esc(item.customerPhone || '—')}</p>
+          <p>${quotePending(item) ? 'Baada ya kukubali' : esc(item.customerPhone || '—')}</p>
         </section>
         <section>
           <span>Kwenda</span>
           <strong>${esc(item.recipientName || '—')}</strong>
-          <p>${esc(item.recipientPhone || '—')}</p>
+          <p>${quotePending(item) ? 'Baada ya kukubali' : esc(item.recipientPhone || '—')}</p>
         </section>
       </div>
       <div class="sticker-meta sticker-meta-4">
         <div><span>Uzito</span><strong>${esc(item.weightKg || 0)} kg</strong></div>
         <div><span>Bei ya usafirishaji</span><strong>${esc(money(priceOf(item)))}</strong></div>
-        <div><span>Thamani ya mzigo</span><strong>${value ? esc(money(value)) : '—'}</strong></div>
+        <div><span>Thamani ya bidhaa</span><strong>${value ? esc(money(value)) : '—'}</strong></div>
         <div><span>Tarehe</span><strong>${esc(tagDate)}</strong></div>
       </div>
       <p class="sticker-route secondary">${esc(routeLine)}</p>
@@ -2828,7 +2868,7 @@ function pickupQueue() {
       <td><a href="#/assignment/${esc(item.id)}">${esc(item.orderNumber || item.id.slice(0, 6))}</a></td>
       <td>${esc(item.destination)}</td>
       <td>${esc(item.customerName)}</td>
-      <td>${esc(item.customerPhone)}</td>
+      <td>${quotePending(item) ? '—' : esc(item.customerPhone || '')}</td>
       <td>${esc(item.weightKg || 0)} kg</td>
       <td>${stageBadge(item)}</td>
     </tr>`).join('')}
@@ -3282,8 +3322,7 @@ function scoreCarrier(order, carrier, routes, vehicles) {
 
 function shipmentCopy(order, orderId) {
   const quoteStatus = String(order.quoteStatus || '').trim();
-  const awaitingQuote = quoteStatus === 'awaiting_company';
-  const cashAmount = awaitingQuote ? 0 : cashOf(order);
+  const cashAmount = shippingFeeOf(order);
   const amount = feeSplit(cashAmount);
   const photos = Array.isArray(order.parcelPhotoUrls)
     ? order.parcelPhotoUrls.map((url) => String(url || '').trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 6)
@@ -3316,11 +3355,11 @@ function shipmentCopy(order, orderId) {
     outsideShippingMode: String(order.outsideShippingMode || '').trim(),
     quoteStatus,
     weightKg: weightOf(order),
-    cashExpected: awaitingQuote ? 0 : amount.amount,
+    cashExpected: amount.amount,
     // Commission counts only when the company takes the order.
     haulFee: 0,
-    carrierNet: awaitingQuote ? 0 : amount.amount,
-    fareLabel: awaitingQuote ? 'Bei baada ya kampuni' : String(order.totalLabel || order.fareLabel || '').trim(),
+    carrierNet: amount.amount,
+    fareLabel: cashAmount > 0 ? String(order.totalLabel || order.fareLabel || '').trim() : 'Bei baada ya kampuni',
     paymentMethod: 'cash',
     ...(photos.length ? { parcelPhotoUrls: photos } : {}),
     cargoPhotos: Array.isArray(order.cargoPhotos) ? order.cargoPhotos : (order.photoUrls || []),
@@ -3628,6 +3667,7 @@ async function applyManifestMark(id, stage) {
   if (!snap.exists()) throw new Error('Shipment not found.');
   const current = snap.data();
   if (!mine({ id, ...current }) || current.carrierId !== state.carrier?.id) throw new Error('Not your shipment.');
+  if (quotePending({ id, ...current })) throw new Error('Mteja bado hajaukubali bei ya usafirishaji.');
   if (stage === 'loaded') {
     if (isLoaded({ ...current, id })) return;
     const patch = {
@@ -3836,6 +3876,10 @@ async function onViewClick(event) {
   const snap = await getDoc(ref);
   if (!snap.exists() || !mine({ id, ...snap.data() })) return;
   const current = snap.data();
+  if (quotePending({ id, ...current }) && ['set-status', 'verify', 'accept', 'start-transit', 'deliver', 'journey', 'track', 'pickup'].includes(act)) {
+    window.alert('Mteja bado hajaukubali bei ya usafirishaji.');
+    return;
+  }
   if (act === 'set-status') {
     const step = actBtn.dataset.step;
     const status = actBtn.dataset.status;
@@ -4145,7 +4189,7 @@ async function onViewSubmit(event) {
     const driver = (state.drivers || []).find((item) => item.id === data.get('driverId'));
     const order = state.shipments.find((item) => item.id === data.get('orderId'));
     if (!driver?.phone || !order) throw new Error('Choose a driver and an order.');
-    const href = whatsappHref(driver.phone, orderBrief(order));
+    const href = whatsappHref(driver.phone, whatsappOrderText(order));
     window.open(href, '_blank', 'noopener');
     await updateDoc(doc(db, 'carrierShipments', order.id), {
       assignedDriverId: driver.id,
