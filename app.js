@@ -1724,7 +1724,6 @@ function ordersTrend() {
       key,
       label: new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
       count: 0,
-      revenue: 0,
     });
   }
   const index = new Map(days.map((day) => [day.key, day]));
@@ -1738,10 +1737,59 @@ function ordersTrend() {
     const bucket = index.get(darDayKey(ms));
     if (!bucket) return;
     bucket.count += 1;
-    const owned = stage === 'verified' || stage === 'transit' || stage === 'delivered';
-    if (owned) bucket.revenue += Math.max(0, priceOf(item));
   });
   return { days, dated };
+}
+
+function ordersOverTimeChart(days) {
+  const W = 640;
+  const H = 200;
+  const pad = { l: 36, r: 12, t: 18, b: 32 };
+  const plotW = W - pad.l - pad.r;
+  const plotH = H - pad.t - pad.b;
+  const maxCount = Math.max(1, ...days.map((day) => day.count));
+  const yTicks = maxCount <= 2
+    ? [0, maxCount]
+    : [0, Math.ceil(maxCount / 2), maxCount];
+  const n = days.length;
+  const points = days.map((day, i) => {
+    const x = pad.l + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+    const y = pad.t + plotH - (day.count / maxCount) * plotH;
+    return { x, y, day };
+  });
+  const linePath = points
+    .map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+    .join(' ');
+  const last = points[points.length - 1];
+  const first = points[0];
+  const areaPath = `${linePath} L${last.x.toFixed(1)} ${(pad.t + plotH).toFixed(1)} L${first.x.toFixed(1)} ${(pad.t + plotH).toFixed(1)} Z`;
+  const grid = yTicks.map((tick) => {
+    const y = pad.t + plotH - (tick / maxCount) * plotH;
+    return `<line class="orders-chart-grid" x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" />
+      <text class="orders-chart-tick" x="${pad.l - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end">${tick}</text>`;
+  }).join('');
+  const xLabels = points.map((p, i) => {
+    if (i !== 0 && i !== n - 1 && i % 2 !== 0) return '';
+    return `<text class="orders-chart-xlabel" x="${p.x.toFixed(1)}" y="${H - 8}" text-anchor="middle">${esc(p.day.label.split(' ')[0])}</text>`;
+  }).join('');
+  const dots = points.map((p) => (
+    `<circle class="orders-chart-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5">
+      <title>${esc(p.day.label)} · ${p.day.count} oda</title>
+    </circle>`
+  )).join('');
+  return `<svg class="orders-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Oda kwa siku, siku 14">
+    <defs>
+      <linearGradient id="ordersAreaFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#14532d" stop-opacity="0.22"/>
+        <stop offset="100%" stop-color="#14532d" stop-opacity="0.02"/>
+      </linearGradient>
+    </defs>
+    ${grid}
+    <path class="orders-chart-area" d="${areaPath}" fill="url(#ordersAreaFill)"/>
+    <path class="orders-chart-line" d="${linePath}" fill="none"/>
+    ${dots}
+    ${xLabels}
+  </svg>`;
 }
 
 function metricCell(label, value, tone) {
@@ -1752,8 +1800,7 @@ function dashboard() {
   const company = state.carrier?.companyName || 'Transporter';
   const kpis = dashboardKpis();
   const trend = ordersTrend();
-  const chartMode = trend.days.some((day) => day.revenue > 0) ? 'revenue' : 'orders';
-  const maxBar = Math.max(1, ...trend.days.map((day) => (chartMode === 'revenue' ? day.revenue : day.count)));
+  const windowTotal = trend.days.reduce((sum, day) => sum + day.count, 0);
   return `<section class="dash-home">
     <header class="ops-head dash-head">
       <div>
@@ -1771,22 +1818,13 @@ function dashboard() {
     </section>
     <section class="panel dash-chart">
       <div class="section-head">
-        <h2>Progress ya biashara</h2>
-        <span class="muted">${chartMode === 'revenue' ? 'Mapato · siku 14' : 'Oda · siku 14'}</span>
+        <h2>Oda · muda</h2>
+        <span class="muted">Siku 14</span>
       </div>
       ${trend.dated
-        ? `<div class="trend progress-trend" aria-label="Progress ya biashara">${trend.days.map((day) => {
-            const value = chartMode === 'revenue' ? day.revenue : day.count;
-            const tip = chartMode === 'revenue'
-              ? `${day.label} · ${money(day.revenue)} · ${day.count} oda`
-              : `${day.label} · ${day.count} oda`;
-            const height = Math.max(value > 0 ? 8 : 3, Math.round((value / maxBar) * 100));
-            return `<span title="${esc(tip)}"><i style="height:${height}%"></i><em>${esc(day.label.split(' ')[0])}</em></span>`;
-          }).join('')}</div>
-          <p class="muted trend-note">${chartMode === 'revenue'
-            ? `Jumla ya mapato kwenye chati · ${money(trend.days.reduce((sum, day) => sum + day.revenue, 0))}`
-            : `${trend.dated} oda zilizo na tarehe kwenye desk.`}</p>`
-        : '<p class="empty">Hakuna data ya kuchora progress bado.</p>'}
+        ? `<div class="orders-chart" aria-label="Oda kwa siku">${ordersOverTimeChart(trend.days)}</div>
+          <p class="muted trend-note">${windowTotal} oda katika siku 14</p>`
+        : '<p class="empty">Hakuna oda za kuchora bado.</p>'}
     </section>
   </section>`;
 }
