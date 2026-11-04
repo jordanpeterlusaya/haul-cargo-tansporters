@@ -158,6 +158,32 @@ function formatCountdown(msLeft) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+const UNQUOTED_PING_MS = 60 * 1000;
+const unquotedPingBucket = Object.create(null);
+
+function unquotedSinceMs(item) {
+  return timeMs(item?.offeredAt) || timeMs(item?.createdAt) || timeMs(item?.updatedAt);
+}
+
+function stillUnquoted(item) {
+  if (!item || quoteAccepted(item)) return false;
+  if (priceOf(item) > 0) return false;
+  const qs = String(item.quoteStatus || '').trim();
+  if (qs === 'offered' || qs === 'confirmed' || qs === 'declined') return false;
+  if (['cancelled', 'delivered', 'in_transit', 'arrived'].includes(String(item.shipmentStatus || ''))) return false;
+  return orderBucket(item) === 'new';
+}
+
+function unquotedWaitMarkup(item) {
+  if (!stillUnquoted(item)) return '';
+  const since = unquotedSinceMs(item);
+  if (!since) return '';
+  const elapsed = Math.max(0, Date.now() - since);
+  const left = UNQUOTED_PING_MS - (elapsed % UNQUOTED_PING_MS);
+  const late = elapsed >= UNQUOTED_PING_MS;
+  return `<p class="quote-wait${late ? ' is-late' : ''}" data-unquoted-since="${since}" data-unquoted-id="${esc(item.id)}"><span>Bei</span><strong>${formatCountdown(left)}</strong></p>`;
+}
+
 function refreshCountdownLabels() {
   document.querySelectorAll('[data-offer-until]').forEach((el) => {
     const until = Number(el.dataset.offerUntil);
@@ -168,6 +194,24 @@ function refreshCountdownLabels() {
     el.classList.toggle('urgent', left > 0 && left <= 60000);
     el.classList.toggle('expired', left <= 0);
   });
+  const due = [];
+  document.querySelectorAll('[data-unquoted-since]').forEach((el) => {
+    const since = Number(el.dataset.unquotedSince);
+    const id = el.dataset.unquotedId || '';
+    if (!since || !id) return;
+    const elapsed = Math.max(0, Date.now() - since);
+    const left = UNQUOTED_PING_MS - (elapsed % UNQUOTED_PING_MS);
+    const bucket = Math.floor(elapsed / UNQUOTED_PING_MS);
+    const strong = el.querySelector('strong');
+    if (strong) strong.textContent = formatCountdown(left);
+    el.classList.toggle('is-late', bucket >= 1);
+    if (bucket >= 1 && unquotedPingBucket[id] !== bucket) {
+      unquotedPingBucket[id] = bucket;
+      const item = state.shipments.find((row) => row.id === id);
+      if (item && stillUnquoted(item)) due.push(item);
+    }
+  });
+  due.forEach((item) => announceIncomingOffer(item));
 }
 
 function startCountdownTicker() {
@@ -2047,8 +2091,7 @@ function orderBucket(item) {
   const mineId = state.carrier?.id;
   const status = String(item.shipmentStatus || '');
   const step = String(item.trackStep || '');
-  const declined = Array.isArray(item.declinedCarrierIds) && item.declinedCarrierIds.includes(mineId);
-  if (status === 'cancelled' || (declined && item.carrierId !== mineId && item.offeredCarrierId !== mineId)) return 'cancelled';
+  if (status === 'cancelled') return 'cancelled';
   if (status === 'delivered' || step === 'handed') return 'delivered';
   if (status === 'in_transit' || status === 'arrived' || step === 'transit' || step === 'arrived' || ['at_checkpoint', 'near_destination'].includes(item.journeyStatus)) return 'transit';
   if (item.carrierId === mineId) return 'verified';
@@ -2136,14 +2179,18 @@ function maskedPhone(phone) {
   return `${dial.slice(0, 2)}•• ••• ${dial.slice(-2)}`;
 }
 
+function agentOwns(item) {
+  return Boolean(item && state.carrier?.id && item.carrierId === state.carrier.id);
+}
+
 function contactsOpen(item) {
-  if (!item) return false;
-  if (quoteAccepted(item)) return true;
-  const qs = String(item.quoteStatus || '').trim();
-  if (qs === 'awaiting_company' || qs === 'offered' || qs === 'declined') return false;
-  if (quotePending(item)) return false;
-  const bucket = orderBucket(item);
-  return bucket === 'verified' || bucket === 'transit' || bucket === 'delivered';
+  return agentOwns(item);
+}
+
+function hasPickupCoords(item) {
+  const lat = Number(item?.pickupLatitude);
+  const lng = Number(item?.pickupLongitude);
+  return Number.isFinite(lat) && Number.isFinite(lng);
 }
 
 function personAvatar(name, tone) {
@@ -2171,17 +2218,18 @@ function quoteSeed(item) {
 }
 
 function photoStrip(item) {
+  if (!agentOwns(item)) return '';
   void ensureCargoPhotos(item);
   const photos = cargoPhotoList(item);
   if (!photos.length) {
     return `<div class="photo-strip is-empty" aria-hidden="true"><span class="photo-fallback">${uiIcon('box')}</span></div>`;
   }
-  return `<div class="photo-strip">${photos.map((url) => `<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="" referrerpolicy="no-referrer" loading="lazy" /></a>`).join('')}</div>`;
+  return `<div class="photo-strip">${photos.map((url) => `<button type="button" class="photo-open" data-photo="${esc(url)}" aria-label="Fungua picha"><img src="${esc(url)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="lazy" /></button>`).join('')}</div>`;
 }
 
 function shipPriceRow(fee, extra = '') {
   return `<div class="ship-row">
-    <div class="ship-figure"><span>Bei ya usafirishaji</span><strong>${esc(money(fee))}</strong></div>
+    <div class="ship-figure"><span>Bei</span><strong>${esc(money(fee))}</strong></div>
     ${commissionMark(fee)}
     ${extra}
   </div>`;
@@ -2207,7 +2255,7 @@ function quotePanel(item, opts = {}) {
   const seedAmount = Math.round(Number(String(seed).replace(/[^\d]/g, '')) || 0);
   return `<form class="quote-form price-quote-panel" data-quote="${esc(item.id)}">
     <div class="ship-row">
-      <label class="ship-figure"><span>Bei ya usafirishaji</span>
+      <label class="ship-figure"><span>Bei</span>
         <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="0" required />
       </label>
       ${commissionMark(seedAmount)}
@@ -2258,9 +2306,9 @@ function stageAction(item) {
     return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('delivered')} Delivered</button></div>`;
   }
   if (bucket === 'verified') {
-    return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="start-transit" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('transit')} Start</button></div>`;
+    return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="verify" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('verified')} Verify</button></div>`;
   }
-  return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="accept" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('verified')} Verify</button><button class="btn line" type="button" data-act="reject" data-id="${id}" ${busy ? 'disabled' : ''}>Decline</button></div>`;
+  return tracker;
 }
 
 function stageButton(item) {
@@ -2286,6 +2334,7 @@ function orderPipeline() {
 function glanceBadge(item) {
   const qs = String(item.quoteStatus || '').trim();
   const declined = qs === 'declined' || /declined the company price/i.test(String(item.cancelReason || ''));
+  if (quoteAccepted(item) && !agentOwns(item)) return '<span class="badge stage-verified">Mteja amekubali</span>';
   if (declined) return '<span class="badge stage-cancelled">Amekataa</span>';
   if (!quoteAccepted(item) && qs === 'offered' && priceOf(item) > 0) return '<span class="badge stage-new">Bei imetumwa</span>';
   if (qs === 'awaiting_company' || (orderBucket(item) === 'new' && priceOf(item) <= 0)) {
@@ -2300,13 +2349,14 @@ function placeName(value) {
 }
 
 function arriveCard(item, opts) {
-  void ensureCargoPhotos(item);
+  const owned = agentOwns(item);
+  if (owned) void ensureCargoPhotos(item);
   const open = state.deskOpen === item.id;
   const from = placeName(item.pickupLabel || item.origin);
   const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
-  const photo = cargoPhotoList(item)[0];
+  const photo = owned ? cargoPhotoList(item)[0] : '';
   const thumb = photo
-    ? `<img class="arrive-thumb" src="${esc(photo)}" alt="" referrerpolicy="no-referrer" />`
+    ? `<button type="button" class="photo-open arrive-thumb-btn" data-photo="${esc(photo)}" aria-label="Fungua picha"><img class="arrive-thumb" src="${esc(photo)}" alt="" referrerpolicy="no-referrer" /></button>`
     : '';
   return `<article class="arrive-card ${open ? 'is-open' : ''}">
     <div class="arrive-row">
@@ -2316,6 +2366,7 @@ function arriveCard(item, opts) {
         <span class="arrive-arrow" aria-hidden="true">${uiIcon('arrow')}</span>
         <strong title="${esc(to)}">${esc(to)}</strong>
       </div>
+      ${unquotedWaitMarkup(item)}
       ${glanceBadge(item)}
       <button class="btn primary small arrive-toggle" type="button" data-desk="open" data-id="${esc(item.id)}" aria-expanded="${open ? 'true' : 'false'}">${open ? 'Hide details' : 'Show details'}</button>
     </div>
@@ -2326,9 +2377,11 @@ function arriveCard(item, opts) {
 function ordersDesk(tab) {
   const current = ORDER_TABS.some(([key]) => key === tab) ? tab : 'new';
   if (state.deskTab !== current) {
+    const keep = state.deskOpen;
     state.deskTab = current;
     state.deskPage = 1;
-    state.deskOpen = '';
+    const kept = state.shipments.find((item) => item.id === keep);
+    state.deskOpen = kept && orderBucket(kept) === current ? keep : '';
   }
   const query = String(state.deskQuery || '').trim().toLowerCase();
   const fromMs = state.deskFrom ? Date.parse(`${state.deskFrom}T00:00:00`) : 0;
@@ -2349,7 +2402,11 @@ function ordersDesk(tab) {
       return true;
     });
   }
-  rows.sort((a, b) => orderClock(b) - orderClock(a));
+  if (current === 'transit') {
+    rows.sort((a, b) => String(a.orderNumber || a.parcelCode || a.id).localeCompare(String(b.orderNumber || b.parcelCode || b.id), undefined, { numeric: true, sensitivity: 'base' }));
+  } else {
+    rows.sort((a, b) => orderClock(b) - orderClock(a));
+  }
   const pageSize = 12;
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   const page = Math.min(Math.max(1, state.deskPage || 1), pages);
@@ -2564,7 +2621,9 @@ function historyPage() {
 }
 
 function transitOrdersPage() {
-  const rows = state.shipments.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'in_transit');
+  const rows = state.shipments
+    .filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'in_transit')
+    .sort((a, b) => String(a.orderNumber || a.parcelCode || a.id).localeCompare(String(b.orderNumber || b.parcelCode || b.id), undefined, { numeric: true, sensitivity: 'base' }));
   return `<section class="panel"><div class="section-head"><h2>In Transit</h2><span class="muted">On the road only</span></div>${ordersTable(rows, false)}</section>`;
 }
 
@@ -2594,41 +2653,49 @@ function orderPager(count, page, pages) {
 }
 
 function orderBrief(item, opts = {}) {
-  void ensureCargoPhotos(item);
-  const open = contactsOpen(item);
+  const owned = agentOwns(item);
+  if (owned) void ensureCargoPhotos(item);
   const value = declaredValueOf(item);
   const from = placeName(item.origin || item.pickupLabel);
   const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
   const sender = item.senderName || item.customerName || '—';
   const receiver = item.recipientName || '—';
+  const busy = state.stageBusy === item.id;
+  const acceptGate = !owned && quoteAccepted(item)
+    ? `<div class="accept-gate"><p class="accept-title">Mteja amekubali</p><button class="btn primary" type="button" data-act="accept" data-id="${esc(item.id)}" ${busy ? 'disabled' : ''}>Accept</button></div>`
+    : '';
+  const mapBtn = owned && hasPickupCoords(item)
+    ? `<a class="btn primary map-btn" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Google Maps</a>`
+    : '';
   return `<article class="order-brief">
     <div class="route-visual">
       <div class="route-stop">
         <span class="pin origin">${uiIcon('pin')}</span>
+        <span class="stop-label">Inatoka</span>
         <strong>${esc(from)}</strong>
       </div>
       <div class="route-track" aria-hidden="true"><span></span><i>${uiIcon('truck')}</i><span></span></div>
       <div class="route-stop">
         <span class="pin dest">${uiIcon('pin')}</span>
+        <span class="stop-label">Inaenda</span>
         <strong>${esc(to)}</strong>
       </div>
-      <a class="route-map" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener" aria-label="Map">${uiIcon('map')}</a>
     </div>
     <div class="party-row">
       <div class="party">
         ${personAvatar(sender, 'sender')}
         <div>
-          <span class="sr-only">Sender</span>
+          <span class="party-label">Mtumaji</span>
           <strong>${esc(sender)}</strong>
-          ${phoneVisual(item.senderPhone || item.customerPhone, open)}
+          ${owned ? phoneVisual(item.senderPhone || item.customerPhone, true) : ''}
         </div>
       </div>
       <div class="party">
         ${personAvatar(receiver, 'receiver')}
         <div>
-          <span class="sr-only">Receiver</span>
+          <span class="party-label">Mpokeaji</span>
           <strong>${esc(receiver)}</strong>
-          ${phoneVisual(item.recipientPhone, open)}
+          ${owned ? phoneVisual(item.recipientPhone, true) : ''}
         </div>
       </div>
     </div>
@@ -2636,13 +2703,16 @@ function orderBrief(item, opts = {}) {
     <div class="goods-tile">
       <span class="goods-ico">${uiIcon('box')}</span>
       <div>
-        <span>Thamani ya bidhaa</span>
+        <span>Thamani</span>
         <strong>${value ? esc(money(value)) : '—'}</strong>
       </div>
     </div>
-    ${quotePanel(item, { force: Boolean(opts.forceQuote) })}
-    ${open ? stageAction(item) : ''}
-    ${opts.full && item.carrierId === state.carrier?.id ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}" aria-label="Receipt">${uiIcon('box')} Receipt</a></div>` : ''}
+    ${unquotedWaitMarkup(item)}
+    ${quotePanel(item, { force: Boolean(opts.forceQuote) && !quoteAccepted(item) })}
+    ${acceptGate}
+    ${mapBtn}
+    ${owned ? stageAction(item) : ''}
+    ${opts.full && owned ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}" aria-label="Receipt">${uiIcon('box')} Receipt</a></div>` : ''}
   </article>`;
 }
 
@@ -2837,10 +2907,7 @@ function orderRow(item) {
   const offered = item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id;
   const owned = item.carrierId === state.carrier?.id && item.shipmentStatus !== 'assigned';
   const value = declaredValueOf(item);
-  const actions = offered
-    ? `<button class="btn primary small" data-act="accept" data-id="${esc(item.id)}" type="button">Kubali</button>
-       <button class="btn line small" data-act="reject" data-id="${esc(item.id)}" type="button">Kataa</button>`
-    : `<a class="btn primary small" href="#/assignment/${esc(item.id)}">Fungua</a>`;
+  const actions = `<a class="btn primary small" href="#/assignment/${esc(item.id)}">Fungua</a>`;
   return `<article class="cargo-item">
     <div class="cargo-item-body">
       <strong>${esc(dropOffLabel(item))}</strong>
@@ -3689,6 +3756,7 @@ async function render() {
   else if (['profile', 'verification', 'staff', 'notifications'].includes(page)) html = companyPages();
   else html = dashboard();
   viewEl.innerHTML = html;
+  if (viewEl.querySelector('[data-unquoted-since], [data-offer-until]')) startCountdownTicker();
   if (page === 'profile') {
     const all = document.getElementById('profileCoverageAll');
     const grid = document.getElementById('profileRegionGrid');
@@ -3859,6 +3927,16 @@ async function requireCarrier() {
 }
 
 async function onViewClick(event) {
+  const photoBtn = event.target.closest('[data-photo]');
+  if (photoBtn) {
+    const box = document.getElementById('photoLightbox');
+    const img = document.getElementById('photoLightboxImg');
+    if (box && img) {
+      img.src = photoBtn.dataset.photo || '';
+      box.hidden = false;
+    }
+    return;
+  }
   const go = event.target.closest('[data-go]');
   if (go) {
     navigateApp(go.dataset.go);
@@ -3966,6 +4044,35 @@ async function onViewClick(event) {
     await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id }, { message: label });
     return;
   }
+  if (act === 'verify') {
+    if (current.carrierId !== state.carrier?.id) {
+      window.alert('Kubali oda kwanza.');
+      return;
+    }
+    state.stageBusy = id;
+    actBtn.disabled = true;
+    try {
+      await portalCall('/carrier/portal/verify', { shipmentId: id });
+    } catch {
+      // Older API only stamps verified. The local write still sets in transit.
+    }
+    const patch = {
+      shipmentStatus: 'in_transit',
+      trackStep: 'transit',
+      journeyStatus: 'in_transit',
+      portalStage: 'in_transit',
+      transporterVerifiedAt: serverTimestamp(),
+      inTransitAt: serverTimestamp(),
+      statusHistory: arrayUnion({ status: 'transit', label: 'In transit', at: stamp(), actor: state.user?.email || '' }),
+    };
+    await updateDoc(ref, patch);
+    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id }, { message: 'In transit' });
+    const row = state.shipments.find((item) => item.id === id);
+    if (row) Object.assign(row, { shipmentStatus: 'in_transit', trackStep: 'transit', journeyStatus: 'in_transit' });
+    state.deskOpen = id;
+    if (location.hash.startsWith('#/orders') && !location.hash.startsWith('#/orders/transit')) location.hash = '#/orders/transit';
+    return;
+  }
   if (act === 'verify' || act === 'accept' || act === 'start-transit' || act === 'tracking-link' || act === 'deliver') {
     if ((act === 'accept' || act === 'start-transit' || act === 'deliver') && state.stageBusy) return;
     if (act === 'deliver' && !window.confirm('Mark this order as delivered? The customer will see Delivered.')) return;
@@ -3999,6 +4106,10 @@ async function onViewClick(event) {
       try {
         const payload = await portalCall(path, body);
         await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
+        const row = state.shipments.find((item) => item.id === id);
+        if (row) Object.assign(row, { carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
+        state.deskOpen = id;
+        if (location.hash.startsWith('#/orders') && location.hash !== '#/orders/verified') location.hash = '#/orders/verified';
         const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
         if (note) window.alert(note);
         return;
@@ -4044,12 +4155,12 @@ async function onViewClick(event) {
           haulFeeRate: fee > 0 ? haulFee / fee : rate,
           carrierNet: Math.max(0, fee - haulFee),
           commissionCountedAt: serverTimestamp(),
-          ...(fee > 0 ? { fareLabel: label, quoteStatus: 'offered', carrierQuoteTzs: fee, shippingFeeTzs: fee } : {}),
+          ...(fee > 0 ? { fareLabel: label, quoteStatus: quoteAccepted({ id, ...current }) ? 'confirmed' : 'offered', carrierQuoteTzs: fee, shippingFeeTzs: fee, ...(quoteAccepted({ id, ...current }) ? { customerAcceptedQuote: true, agentAcceptedAt: serverTimestamp() } : {}) } : {}),
           statusHistory: arrayUnion({ status: 'received', label: 'Imepokelewa', at: stamp(), actor: state.user.email }),
           ...extras,
         };
         await updateDoc(ref, acceptPatch);
-        if (orderId && fee > 0 && (needsPrice || String(current.quoteStatus || '') === 'awaiting_company')) {
+        if (orderId && fee > 0 && !quoteAccepted({ id, ...current }) && (needsPrice || String(current.quoteStatus || '') === 'awaiting_company')) {
           await setDoc(doc(db, 'orders', orderId), {
             quoteStatus: 'offered',
             carrierQuoteTzs: fee,
@@ -4062,6 +4173,10 @@ async function onViewClick(event) {
         }
         await updateDoc(doc(db, 'carriers', state.carrier.id), { accepted: increment(1) });
         await mirrorCustomerOrder(id, { ...current, ...acceptPatch });
+        const row = state.shipments.find((item) => item.id === id);
+        if (row) Object.assign(row, { carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received', quoteStatus: acceptPatch.quoteStatus || row.quoteStatus });
+        state.deskOpen = id;
+        if (location.hash.startsWith('#/orders') && location.hash !== '#/orders/verified') location.hash = '#/orders/verified';
         return;
       }
     }
@@ -4671,6 +4786,11 @@ function bindAuth() {
       .catch((error) => {
         window.alert(error.message || 'Bei haikuweza kutumwa.');
       });
+  });
+  document.getElementById('photoLightbox')?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-lightbox-close]')) {
+      document.getElementById('photoLightbox').hidden = true;
+    }
   });
   $('view').addEventListener('click', (event) => {
     const editQuote = event.target.closest('[data-edit-quote]');

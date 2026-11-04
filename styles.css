@@ -3134,7 +3134,7 @@ body:has(#app:not(.hidden)) {
 }
 #app .route-visual {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(88px, 150px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 150px) minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   padding: 16px 14px;
@@ -3454,4 +3454,86 @@ body:has(#app:not(.hidden)) {
   #app .route-map { justify-self: end; }
   #app .order-brief .ship-row { flex-wrap: wrap; }
   #app .commission-mark { width: 100%; }
+}
+#app .stop-label,
+#app .party-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+#app .quote-wait {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  color: #111;
+}
+#app .quote-wait strong { font-size: 15px; }
+#app .quote-wait.is-late { color: #9a3412; }
+#app .accept-gate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #eceee8;
+}
+#app .accept-title { margin: 0; font-weight: 760; }
+#app .photo-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  border-radius: 12px;
+  overflow: hidden;
+}
+#app .photo-strip .photo-open img,
+#app .arrive-thumb-btn img { width: 72px; height: 72px; object-fit: cover; display: block; }
+.photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+}
+.photo-lightbox[hidden] { display: none; }
+.photo-lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+.photo-lightbox figure {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  max-width: min(960px, 92vw);
+  max-height: 90vh;
+}
+.photo-lightbox img {
+  max-width: min(960px, 92vw);
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 12px;
+  background: #111;
+}
+.photo-lightbox-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: #f5e000;
+  color: #111;
+  font-size: 22px;
+  cursor: pointer;
 }
