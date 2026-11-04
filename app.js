@@ -489,22 +489,30 @@ function knownDrivers() {
   return (state.drivers || []).filter((driver) => digits(driver?.phone).length >= 9);
 }
 
-function postAcceptTools(item) {
-  if (!agentOwns(item)) return '';
+function mapsActionButton(item) {
+  return `<button class="btn maps-btn" type="button" data-act="open-maps" data-id="${esc(item.id)}">${uiIcon('map')}<span>Ramani</span></button>`;
+}
+
+function whatsappShareBlock(item) {
   const drivers = knownDrivers();
+  if (!drivers.length) {
+    return `<p class="wa-empty">Ongeza dereva kwenye Drivers.</p>`;
+  }
   const driverOptions = drivers
     .map((driver) => `<option value="${esc(driver.id)}">${esc(driver.name || 'Dereva')} · ${esc(driver.phone || '')}</option>`)
     .join('');
-  const waBlock = drivers.length
-    ? `<div class="wa-share">
-        <label class="wa-share-label" for="waDriver-${esc(item.id)}">Dereva</label>
-        <select id="waDriver-${esc(item.id)}" data-wa-for="${esc(item.id)}" required>${driverOptions}</select>
-        <button class="btn wa-btn" type="button" data-act="share-wa" data-id="${esc(item.id)}">${uiIcon('whatsapp')}<span>WhatsApp</span></button>
-      </div>`
-    : `<p class="wa-empty">Ongeza dereva kwenye Drivers ili kushare oda.</p>`;
+  return `<div class="wa-share">
+    <label class="wa-share-label" for="waDriver-${esc(item.id)}">Dereva</label>
+    <select id="waDriver-${esc(item.id)}" data-wa-for="${esc(item.id)}" required>${driverOptions}</select>
+    <button class="btn wa-btn" type="button" data-act="share-wa" data-id="${esc(item.id)}">${uiIcon('whatsapp')}<span>WhatsApp</span></button>
+  </div>`;
+}
+
+function postAcceptTools(item) {
+  if (!agentOwns(item)) return '';
   return `<div class="post-accept-tools">
-    <button class="btn maps-btn" type="button" data-act="open-maps" data-id="${esc(item.id)}">${uiIcon('map')}<span>Ramani</span><em>Open Maps</em></button>
-    ${waBlock}
+    ${mapsActionButton(item)}
+    ${whatsappShareBlock(item)}
   </div>`;
 }
 
@@ -2289,11 +2297,11 @@ function personAvatar(name, tone) {
 
 function phoneVisual(phone, open) {
   if (!open) {
-    return `<p class="party-phone is-locked">${uiIcon('lock')}<span>${esc(maskedPhone(phone))}</span></p>`;
+    return `<p class="party-phone is-locked" aria-label="Simu imefungwa">${uiIcon('lock')}</p>`;
   }
   const raw = String(phone || '').trim();
   const body = raw ? phoneLine(raw) : '—';
-  return `<p class="party-phone">${uiIcon('phone')}<span class="simu-label">Simu</span><span>${body}</span></p>`;
+  return `<p class="party-phone"><span class="simu-label">Simu</span><span>${body}</span></p>`;
 }
 
 const partyEnrichPending = Object.create(null);
@@ -2407,7 +2415,10 @@ function showAcceptedOrder(id) {
 }
 
 function commissionMark(amount) {
-  return `<div class="commission-mark" aria-label="Commission"><span class="commission-icon">${uiIcon('percent')}</span><strong data-commission-amount>${esc(money(quoteCommission(amount)))}</strong></div>`;
+  return `<div class="money-cell commission-mark" aria-label="Commission 15%">
+    <span class="money-label">Commission 15%</span>
+    <strong data-commission-amount>${esc(money(quoteCommission(amount)))}</strong>
+  </div>`;
 }
 
 function quoteSeed(item) {
@@ -2427,41 +2438,88 @@ function photoStrip(item) {
   return `<div class="photo-strip">${photos.map((url) => `<button type="button" class="photo-open" data-photo="${esc(url)}" aria-label="Fungua picha"><img src="${esc(url)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="lazy" /></button>`).join('')}</div>`;
 }
 
-function shipPriceRow(fee, extra = '') {
-  return `<div class="ship-row">
-    <div class="ship-figure"><span>Bei</span><strong>${esc(money(fee))}</strong></div>
-    ${commissionMark(fee)}
-    ${extra}
-  </div>`;
+function moneyValueCell(label, valueHtml) {
+  return `<div class="money-cell"><span class="money-label">${esc(label)}</span>${valueHtml}</div>`;
 }
 
-function quotePanel(item, opts = {}) {
+function quoteEditorState(item, opts = {}) {
   const qs = String(item.quoteStatus || '').trim();
   const declined = qs === 'declined' || /declined the company price/i.test(String(item.cancelReason || ''));
   const status = String(item.shipmentStatus || '');
   const closed = status === 'cancelled' || status === 'delivered' || orderBucket(item) === 'delivered';
   const editing = Boolean(opts.editing) || state.editingQuoteId === item.id;
   const fee = priceOf(item);
-  if (!declined && !editing && fee > 0 && (closed || qs === 'confirmed' || qs === 'offered')) {
-    const tone = qs === 'offered' ? 'is-sent' : 'is-confirmed';
-    const edit = !closed && qs === 'offered'
+  const showSent = !declined && !editing && fee > 0 && (closed || qs === 'confirmed' || qs === 'offered');
+  const canEdit = !closed && qs === 'offered';
+  const force = Boolean(opts.force) || needsCustomerPrice(item) || declined || editing;
+  return { qs, declined, closed, editing, fee, showSent, canEdit, force };
+}
+
+function moneyBoard(item, opts = {}) {
+  const value = declaredValueOf(item);
+  const goods = moneyValueCell(
+    'Thamani ya bidhaa',
+    `<strong>${value ? esc(money(value)) : '—'}</strong>`,
+  );
+  const stateInfo = quoteEditorState(item, opts);
+  const openEditor = stateInfo.force || stateInfo.editing || stateInfo.declined;
+  if (stateInfo.showSent) {
+    const edit = stateInfo.canEdit
       ? `<button class="btn line small icon-btn" type="button" data-edit-quote="${esc(item.id)}" aria-label="Badilisha bei">${uiIcon('pencil')}</button>`
       : '';
-    return `<div class="price-quote-panel ${tone}">${shipPriceRow(fee, edit)}</div>`;
+    const tone = stateInfo.qs === 'offered' ? 'is-sent' : 'is-confirmed';
+    return `<div class="money-board ${tone}">
+      ${goods}
+      ${moneyValueCell('Bei ya usafirishaji', `<strong class="ship-amount">${esc(money(stateInfo.fee))}</strong>${edit}`)}
+      ${commissionMark(stateInfo.fee)}
+    </div>`;
   }
-  const force = Boolean(opts.force) || needsCustomerPrice(item) || declined || editing;
-  if (!force) return '';
+  if (!openEditor) {
+    return `<div class="money-board${stateInfo.fee > 0 ? ' is-confirmed' : ''}">
+      ${goods}
+      ${moneyValueCell('Bei ya usafirishaji', `<strong class="ship-amount">${stateInfo.fee > 0 ? esc(money(stateInfo.fee)) : '—'}</strong>`)}
+      ${commissionMark(stateInfo.fee)}
+    </div>`;
+  }
   const seed = quoteSeed(item);
   const seedAmount = Math.round(Number(String(seed).replace(/[^\d]/g, '')) || 0);
-  return `<form class="quote-form price-quote-panel" data-quote="${esc(item.id)}">
-    <div class="ship-row">
-      <label class="ship-figure"><span>Bei ya usafirishaji</span>
+  return {
+    quoting: true,
+    amount: seedAmount,
+    markup: `${goods}
+      <label class="money-cell">
+        <span class="money-label">Bei ya usafirishaji</span>
         <input name="amount" inputmode="numeric" type="number" min="1000" step="500" value="${esc(seed)}" placeholder="0" required />
       </label>
-      ${commissionMark(seedAmount)}
-    </div>
-    <button class="btn primary" type="submit">Tuma bei</button>
-  </form>`;
+      ${commissionMark(seedAmount)}`,
+  };
+}
+
+/** Kept for any leftover callers — money board owns quoting UI now. */
+function quotePanel(item, opts = {}) {
+  const board = moneyBoard(item, opts);
+  if (board && typeof board === 'object' && board.quoting) {
+    return `<form class="quote-form price-quote-panel money-quote" data-quote="${esc(item.id)}">
+      <div class="money-board is-editing">${board.markup}</div>
+      <button class="btn primary" type="submit">Tuma bei</button>
+    </form>`;
+  }
+  return board || '';
+}
+
+function briefPrimaryAction(item) {
+  if (!contactsOpen(item)) return '';
+  const bucket = orderBucket(item);
+  if (!bucket || bucket === 'cancelled' || bucket === 'delivered') return '';
+  const id = esc(item.id);
+  const busy = state.stageBusy === item.id;
+  if (bucket === 'transit') {
+    return `<button class="btn primary" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>Delivered</button>`;
+  }
+  if (bucket === 'verified') {
+    return `<button class="btn primary verify-btn" type="button" data-act="verify" data-id="${id}" ${busy ? 'disabled' : ''}>Verify</button>`;
+  }
+  return '';
 }
 
 function stageStamp(item, key) {
@@ -2548,26 +2606,39 @@ function placeName(value) {
   return text || '—';
 }
 
+function shortPlace(value) {
+  const text = placeName(value);
+  if (text === '—') return text;
+  const head = text.split(/,|\s+[–—-]\s+|\s+near\s+/i)[0].trim() || text;
+  if (head.length <= 32) return head;
+  return `${head.slice(0, 30).trim()}…`;
+}
+
 function arriveCard(item, opts) {
   void ensureCargoPhotos(item);
   const open = state.deskOpen === item.id;
-  const from = placeName(item.pickupLabel || item.origin);
-  const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  const from = shortPlace(item.pickupLabel || item.origin);
+  const to = shortPlace(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  const fromFull = placeName(item.pickupLabel || item.origin);
+  const toFull = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
   const photo = cargoPhotoList(item)[0] || '';
   const thumb = photo
     ? `<button type="button" class="photo-open arrive-thumb-btn" data-photo="${esc(photo)}" aria-label="Fungua picha"><img class="arrive-thumb" src="${esc(photo)}" alt="" referrerpolicy="no-referrer" /></button>`
     : `<span class="arrive-thumb is-empty" aria-hidden="true">${uiIcon('box')}</span>`;
-  return `<article class="arrive-card ${open ? 'is-open' : ''}">
-    <div class="arrive-row">
-      ${thumb}
-      <div class="arrive-route">
-        <strong title="${esc(from)}">${esc(from)}</strong>
+  const summary = open
+    ? `<div class="arrive-route is-open-summary"><strong>#${esc(shipmentCode(item))}</strong></div>`
+    : `<div class="arrive-route">
+        <strong title="${esc(fromFull)}">${esc(from)}</strong>
         <span class="arrive-arrow" aria-hidden="true">${uiIcon('arrow')}</span>
-        <strong title="${esc(to)}">${esc(to)}</strong>
+        <strong title="${esc(toFull)}">${esc(to)}</strong>
       </div>
       ${unquotedWaitMarkup(item)}
-      ${glanceBadge(item)}
-      <button class="btn primary small arrive-toggle" type="button" data-desk="open" data-id="${esc(item.id)}" aria-expanded="${open ? 'true' : 'false'}">${open ? 'Hide details' : 'Show details'}</button>
+      ${glanceBadge(item)}`;
+  return `<article class="arrive-card ${open ? 'is-open' : ''}">
+    <div class="arrive-row">
+      ${open ? '' : thumb}
+      ${summary}
+      <button class="btn ${open ? 'line' : 'primary'} small arrive-toggle" type="button" data-desk="open" data-id="${esc(item.id)}" aria-expanded="${open ? 'true' : 'false'}">${open ? 'Funga' : 'Show details'}</button>
     </div>
     ${open ? `<div class="arrive-detail">${orderBrief(item, opts)}</div>` : ''}
   </article>`;
@@ -2865,62 +2936,87 @@ function orderBrief(item, opts = {}) {
   const owned = agentOwns(item);
   void ensureCargoPhotos(item);
   if (owned) void ensureAcceptedParty(item);
-  const value = declaredValueOf(item);
-  const from = placeName(item.origin || item.pickupLabel);
-  const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  const from = shortPlace(item.origin || item.pickupLabel);
+  const to = shortPlace(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  const fromFull = placeName(item.origin || item.pickupLabel);
+  const toFull = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
   const sender = item.senderName || item.customerName || '—';
   const receiver = item.recipientName || '—';
   const busy = state.stageBusy === item.id;
-  const acceptGate = !owned && quoteAccepted(item)
-    ? `<div class="accept-gate"><p class="accept-title">Mteja amekubali</p><button class="btn primary" type="button" data-act="accept" data-id="${esc(item.id)}" ${busy ? 'disabled' : ''}>Accept</button></div>`
+  const phonesOpen = contactsOpen(item);
+  const quoteOpts = { force: Boolean(opts.forceQuote) && !quoteAccepted(item) };
+  const board = moneyBoard(item, quoteOpts);
+  const quoting = board && typeof board === 'object' && board.quoting;
+  const moneyBlock = quoting
+    ? `<div class="money-board is-editing">${board.markup}</div>`
+    : board;
+  const wait = unquotedWaitMarkup(item);
+  const acceptNeeded = !owned && quoteAccepted(item);
+  const stageCta = owned ? briefPrimaryAction(item) : '';
+  let actionsInner = '';
+  if (quoting) {
+    actionsInner = `<button class="btn primary" type="submit">Tuma bei</button>`;
+  } else if (acceptNeeded) {
+    actionsInner = `<button class="btn primary" type="button" data-act="accept" data-id="${esc(item.id)}" ${busy ? 'disabled' : ''}>Accept</button>`;
+  } else if (owned) {
+    actionsInner = `${mapsActionButton(item)}${whatsappShareBlock(item)}${stageCta}`;
+  }
+  const actions = actionsInner
+    ? `<div class="brief-actions ${owned && !quoting && !acceptNeeded ? 'is-post' : ''}">${actionsInner}</div>`
     : '';
-  return `<article class="order-brief">
-    <div class="route-visual">
+  const body = `
+    <header class="brief-head">
+      <h3 class="brief-code">#${esc(shipmentCode(item))}</h3>
+      ${glanceBadge(item)}
+    </header>
+    <section class="route-visual" aria-label="Njia">
       <div class="route-stop">
         <span class="pin origin">${uiIcon('pin')}</span>
         <span class="stop-label">Inatoka</span>
-        <strong>${esc(from)}</strong>
+        <strong title="${esc(fromFull)}">${esc(from)}</strong>
       </div>
       <div class="route-track" aria-hidden="true"><span></span><i>${uiIcon('truck')}</i><span></span></div>
       <div class="route-stop">
         <span class="pin dest">${uiIcon('pin')}</span>
         <span class="stop-label">Inaenda</span>
-        <strong>${esc(to)}</strong>
+        <strong title="${esc(toFull)}">${esc(to)}</strong>
       </div>
-    </div>
-    <div class="party-row">
-      <div class="party">
-        ${personAvatar(sender, 'sender')}
-        <div>
-          <span class="party-label">Mtumaji</span>
-          <strong>${esc(sender)}</strong>
-          ${owned ? phoneVisual(item.senderPhone || item.customerPhone, true) : ''}
+    </section>
+    <section class="brief-block" aria-label="Watu">
+      <h4 class="brief-title">Watu</h4>
+      <div class="party-list">
+        <div class="party">
+          ${personAvatar(sender, 'sender')}
+          <div class="party-copy">
+            <span class="party-label">Mtumaji</span>
+            <strong>${esc(sender)}</strong>
+            ${phoneVisual(item.senderPhone || item.customerPhone, phonesOpen)}
+          </div>
+        </div>
+        <div class="party">
+          ${personAvatar(receiver, 'receiver')}
+          <div class="party-copy">
+            <span class="party-label">Mpokeaji</span>
+            <strong>${esc(receiver)}</strong>
+            ${phoneVisual(item.recipientPhone, phonesOpen)}
+          </div>
         </div>
       </div>
-      <div class="party">
-        ${personAvatar(receiver, 'receiver')}
-        <div>
-          <span class="party-label">Mpokeaji</span>
-          <strong>${esc(receiver)}</strong>
-          ${owned ? phoneVisual(item.recipientPhone, true) : ''}
-        </div>
-      </div>
-    </div>
-    ${owned ? postAcceptTools(item) : ''}
-    ${photoStrip(item)}
-    <div class="goods-tile">
-      <span class="goods-ico">${uiIcon('box')}</span>
-      <div>
-        <span>Thamani ya bidhaa</span>
-        <strong>${value ? esc(money(value)) : '—'}</strong>
-      </div>
-    </div>
-    ${unquotedWaitMarkup(item)}
-    ${quotePanel(item, { force: Boolean(opts.forceQuote) && !quoteAccepted(item) })}
-    ${acceptGate}
-    ${owned ? stageAction(item) : ''}
-    ${opts.full && owned ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}" aria-label="Receipt">${uiIcon('box')} Receipt</a></div>` : ''}
-  </article>`;
+    </section>
+    <section class="brief-block" aria-label="Mzigo">
+      <h4 class="brief-title">Mzigo</h4>
+      ${photoStrip(item)}
+    </section>
+    <section class="brief-block" aria-label="Pesa">
+      <h4 class="brief-title">Pesa${wait ? ` ${wait}` : ''}</h4>
+      ${moneyBlock}
+    </section>
+    ${actions}
+    ${opts.full && owned ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}" aria-label="Receipt">${uiIcon('box')} Receipt</a></div>` : ''}`;
+  if (quoting) {
+    return `<article class="order-brief"><form class="quote-form brief-quote" data-quote="${esc(item.id)}">${body}</form></article>`;
+  }
+  return `<article class="order-brief">${body}</article>`;
 }
 
 function whatsappHref(phone, text) {
