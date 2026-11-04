@@ -128,6 +128,7 @@ const state = {
   deskFrom: '',
   deskTo: '',
   deskFocus: '',
+  dashRange: '14d',
   stageBusy: '',
   stageBusyIds: {},
   pendingStages: {},
@@ -1714,18 +1715,47 @@ function dashboardKpis() {
   return { mapato, mapatoLeo, commission, odaLeo, completed };
 }
 
-function ordersTrend() {
+function currentMonthLabel() {
+  return new Intl.DateTimeFormat('en-GB', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Africa/Dar_es_Salaam',
+  }).format(new Date());
+}
+
+function dashRangeDays() {
+  if (state.dashRange === 'month') {
+    const todayKey = darTodayKey();
+    const [year, month] = todayKey.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const todayDay = Number(todayKey.slice(-2));
+    const days = [];
+    for (let d = 1; d <= todayDay && d <= daysInMonth; d += 1) {
+      const key = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const ms = new Date(`${key}T12:00:00+03:00`).getTime();
+      days.push({
+        key,
+        label: new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+        count: 0,
+      });
+    }
+    return days.length ? days : [{ key: todayKey, label: darTodayLabel(), count: 0 }];
+  }
   const days = [];
   const now = Date.now();
   for (let i = 13; i >= 0; i -= 1) {
     const ms = now - i * 86400000;
-    const key = darDayKey(ms);
     days.push({
-      key,
+      key: darDayKey(ms),
       label: new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
       count: 0,
     });
   }
+  return days;
+}
+
+function ordersTrend() {
+  const days = dashRangeDays();
   const index = new Map(days.map((day) => [day.key, day]));
   let dated = 0;
   deskRows().forEach((item) => {
@@ -1738,13 +1768,17 @@ function ordersTrend() {
     if (!bucket) return;
     bucket.count += 1;
   });
-  return { days, dated };
+  return {
+    days,
+    dated,
+    rangeLabel: state.dashRange === 'month' ? currentMonthLabel() : 'Siku 14',
+  };
 }
 
 function ordersOverTimeChart(days) {
-  const W = 640;
-  const H = 200;
-  const pad = { l: 36, r: 12, t: 18, b: 32 };
+  const W = 720;
+  const H = 260;
+  const pad = { l: 40, r: 18, t: 22, b: 36 };
   const plotW = W - pad.l - pad.r;
   const plotH = H - pad.t - pad.b;
   const maxCount = Math.max(1, ...days.map((day) => day.count));
@@ -1766,22 +1800,25 @@ function ordersOverTimeChart(days) {
   const grid = yTicks.map((tick) => {
     const y = pad.t + plotH - (tick / maxCount) * plotH;
     return `<line class="orders-chart-grid" x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" />
-      <text class="orders-chart-tick" x="${pad.l - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end">${tick}</text>`;
+      <text class="orders-chart-tick" x="${pad.l - 10}" y="${(y + 4).toFixed(1)}" text-anchor="end">${tick}</text>`;
   }).join('');
+  const step = n > 20 ? 4 : n > 10 ? 2 : 1;
   const xLabels = points.map((p, i) => {
-    if (i !== 0 && i !== n - 1 && i % 2 !== 0) return '';
-    return `<text class="orders-chart-xlabel" x="${p.x.toFixed(1)}" y="${H - 8}" text-anchor="middle">${esc(p.day.label.split(' ')[0])}</text>`;
+    if (i !== 0 && i !== n - 1 && i % step !== 0) return '';
+    const parts = p.day.label.split(' ');
+    const text = n > 16 ? parts[0] : p.day.label;
+    return `<text class="orders-chart-xlabel" x="${p.x.toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(text)}</text>`;
   }).join('');
   const dots = points.map((p) => (
-    `<circle class="orders-chart-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5">
+    `<circle class="orders-chart-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5">
       <title>${esc(p.day.label)} · ${p.day.count} oda</title>
     </circle>`
   )).join('');
-  return `<svg class="orders-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Oda kwa siku, siku 14">
+  return `<svg class="orders-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Oda kwa muda">
     <defs>
       <linearGradient id="ordersAreaFill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#14532d" stop-opacity="0.22"/>
-        <stop offset="100%" stop-color="#14532d" stop-opacity="0.02"/>
+        <stop offset="0%" stop-color="#7CB342" stop-opacity="0.18"/>
+        <stop offset="100%" stop-color="#7CB342" stop-opacity="0.01"/>
       </linearGradient>
     </defs>
     ${grid}
@@ -1796,35 +1833,76 @@ function metricCell(label, value, tone) {
   return `<article class="metric ${tone || ''}"><span>${esc(label)}</span><strong>${esc(value)}</strong></article>`;
 }
 
+function kpiCard(label, value, tone) {
+  return `<article class="so-kpi ${tone || ''}"><span>${esc(label)}</span><strong>${esc(value)}</strong></article>`;
+}
+
+function gaugeCard(label, valueLabel, ratio, tone) {
+  const pct = Math.max(0, Math.min(1, Number(ratio) || 0));
+  const angle = -90 + pct * 180;
+  const r = 54;
+  const cx = 70;
+  const cy = 68;
+  const rad = (deg) => (deg * Math.PI) / 180;
+  const tipX = cx + Math.cos(rad(angle)) * (r - 8);
+  const tipY = cy + Math.sin(rad(angle)) * (r - 8);
+  const track = `M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`;
+  const fillLen = Math.PI * r * pct;
+  return `<article class="so-gauge ${tone || ''}">
+    <span class="so-gauge-label">${esc(label)}</span>
+    <strong class="so-gauge-value">${esc(valueLabel)}</strong>
+    <svg class="so-gauge-svg" viewBox="0 0 140 86" aria-hidden="true">
+      <path class="so-gauge-track" d="${track}" />
+      <path class="so-gauge-fill" d="${track}" stroke-dasharray="${fillLen.toFixed(1)} ${(Math.PI * r).toFixed(1)}" />
+      <line class="so-gauge-needle" x1="${cx}" y1="${cy}" x2="${tipX.toFixed(1)}" y2="${tipY.toFixed(1)}" />
+      <circle class="so-gauge-hub" cx="${cx}" cy="${cy}" r="4.5" />
+    </svg>
+    <em>${Math.round(pct * 100)}%</em>
+  </article>`;
+}
+
 function dashboard() {
   const company = state.carrier?.companyName || 'Transporter';
   const kpis = dashboardKpis();
   const trend = ordersTrend();
   const windowTotal = trend.days.reduce((sum, day) => sum + day.count, 0);
-  return `<section class="dash-home">
-    <header class="ops-head dash-head">
+  const mapatoShare = kpis.mapato > 0 ? kpis.mapatoLeo / kpis.mapato : 0;
+  const commissionShare = kpis.mapato > 0 ? kpis.commission / kpis.mapato : 0;
+  const range = state.dashRange === 'month' ? 'month' : '14d';
+  return `<section class="sales-overview">
+    <header class="so-head">
       <div>
-        <p class="ops-kicker">${esc(company)}</p>
-        <h2>Dashboard</h2>
+        <p class="so-kicker">HAUL · ${esc(company)}</p>
+        <h2>Muhtasari wa biashara</h2>
+        <p class="so-sub">${esc(darTodayLabel())}</p>
       </div>
-      <a class="btn line small" href="#/orders/new">Oda</a>
+      <div class="so-controls" role="group" aria-label="Kipindi">
+        <button class="so-range-btn ${range === '14d' ? 'is-active' : ''}" type="button" data-dash-range="14d">Siku 14</button>
+        <button class="so-range-btn ${range === 'month' ? 'is-active' : ''}" type="button" data-dash-range="month">${esc(currentMonthLabel())}</button>
+      </div>
     </header>
-    <section class="metric-strip dash-kpis" aria-label="Vipimo muhimu">
-      ${metricCell('Mapato', money(kpis.mapato))}
-      ${metricCell('Mapato ya leo', money(kpis.mapatoLeo), kpis.mapatoLeo ? 'hot' : '')}
-      ${metricCell('Commission', money(kpis.commission))}
-      ${metricCell('Oda za leo', kpis.odaLeo, kpis.odaLeo ? 'live' : '')}
-      ${metricCell('Zilizokamilika', kpis.completed)}
-    </section>
-    <section class="panel dash-chart">
-      <div class="section-head">
-        <h2>Oda · muda</h2>
-        <span class="muted">Siku 14</span>
+
+    <section class="so-card so-chart-card" aria-label="Oda kwa muda">
+      <div class="so-chart-head">
+        <h3>ODA × MUDA</h3>
+        <span>${esc(trend.rangeLabel)} · ${windowTotal} oda</span>
       </div>
       ${trend.dated
-        ? `<div class="orders-chart" aria-label="Oda kwa siku">${ordersOverTimeChart(trend.days)}</div>
-          <p class="muted trend-note">${windowTotal} oda katika siku 14</p>`
-        : '<p class="empty">Hakuna oda za kuchora bado.</p>'}
+        ? `<div class="orders-chart">${ordersOverTimeChart(trend.days)}</div>`
+        : '<p class="empty so-empty">Hakuna oda za kuchora bado. Oda zitaonekana hapa zinapofika.</p>'}
+    </section>
+
+    <section class="so-kpis" aria-label="Vipimo muhimu">
+      ${kpiCard('Mapato', money(kpis.mapato))}
+      ${kpiCard('Mapato ya leo', money(kpis.mapatoLeo), kpis.mapatoLeo ? 'hot' : '')}
+      ${kpiCard('Commission', money(kpis.commission))}
+      ${kpiCard('Oda za leo', String(kpis.odaLeo), kpis.odaLeo ? 'live' : '')}
+      ${kpiCard('Zilizokamilika', String(kpis.completed))}
+    </section>
+
+    <section class="so-gauges" aria-label="Vipimo vya sehemu">
+      ${gaugeCard('Mapato ya leo', money(kpis.mapatoLeo), mapatoShare, 'lime')}
+      ${gaugeCard('Commission', money(kpis.commission), commissionShare, 'amber')}
     </section>
   </section>`;
 }
@@ -3361,7 +3439,7 @@ async function render() {
   if (page !== 'trips') stopLatraPoll();
   renderNav();
   const titles = {
-    overview: 'Dashboard',
+    overview: 'Muhtasari',
     orders: 'Orders',
     available: 'Orders',
     transit: 'In Transit',
@@ -3624,6 +3702,15 @@ async function onViewClick(event) {
   const drop = event.target.closest('[data-drop-route]');
   if (drop) {
     await updateDoc(doc(db, 'carrierRoutes', drop.dataset.drop), { active: false });
+    return;
+  }
+  const dashRangeBtn = event.target.closest('[data-dash-range]');
+  if (dashRangeBtn) {
+    const next = dashRangeBtn.dataset.dashRange === 'month' ? 'month' : '14d';
+    if (state.dashRange !== next) {
+      state.dashRange = next;
+      render();
+    }
     return;
   }
   const deskCtl = event.target.closest('[data-desk]');

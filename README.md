@@ -16,6 +16,7 @@ Do **not** treat Firebase Hosting / `*.web.app` as the transporters portal. Auth
 - Public homepage with Login and Register Transport Company
 - Multi-step company registration (profile, regions, credentials + terms)
 - Secure Firebase Auth login and password reset
+- Agents Sales Overview dashboard (`Muhtasari wa biashara`) with Mapato / Commission KPIs and orders-over-time chart
 - Mute-style Orders desk with cargo value vs shipping fee (`Thamani ya mzigo` / `Bei ya usafirishaji`)
 - Admin/company shipping-fee quote editor; map links open pickup
 - Drivers & Vehicles, Notifications, Company Profile, Settings
