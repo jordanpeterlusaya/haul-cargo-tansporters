@@ -443,9 +443,69 @@ async function ensureCargoPhotos(item) {
 
 function pickupMapUrl(item) {
   const coords = pickupCoords(item);
-  if (coords) return `https://www.google.com/maps?q=${encodeURIComponent(`${coords.lat},${coords.lng}`)}`;
-  const query = item?.pickupLabel || item?.origin || item?.destination || 'Dar es Salaam';
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+  if (!coords) return '';
+  const q = `${coords.lat},${coords.lng}`;
+  // Android prefers the navigation intent; desktop/web use Maps dir.
+  if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '')) {
+    return `google.navigation:q=${q}`;
+  }
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(q)}`;
+}
+
+let toastTimer = null;
+function showToast(message) {
+  const text = String(message || '').trim();
+  if (!text) return;
+  let el = document.getElementById('portalToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'portalToast';
+    el.className = 'portal-toast';
+    el.setAttribute('role', 'status');
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add('is-on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('is-on'), 2600);
+}
+
+function openPickupMaps(item) {
+  const coords = pickupCoords(item);
+  if (!coords) {
+    showToast('Hakuna mahali pa pickup (lat,lng).');
+    return false;
+  }
+  const href = pickupMapUrl(item);
+  if (!href) {
+    showToast('Hakuna mahali pa pickup (lat,lng).');
+    return false;
+  }
+  window.open(href, '_blank', 'noopener');
+  return true;
+}
+
+function knownDrivers() {
+  return (state.drivers || []).filter((driver) => digits(driver?.phone).length >= 9);
+}
+
+function postAcceptTools(item) {
+  if (!agentOwns(item)) return '';
+  const drivers = knownDrivers();
+  const driverOptions = drivers
+    .map((driver) => `<option value="${esc(driver.id)}">${esc(driver.name || 'Dereva')} · ${esc(driver.phone || '')}</option>`)
+    .join('');
+  const waBlock = drivers.length
+    ? `<div class="wa-share">
+        <label class="wa-share-label" for="waDriver-${esc(item.id)}">Dereva</label>
+        <select id="waDriver-${esc(item.id)}" data-wa-for="${esc(item.id)}" required>${driverOptions}</select>
+        <button class="btn wa-btn" type="button" data-act="share-wa" data-id="${esc(item.id)}">${uiIcon('whatsapp')}<span>WhatsApp</span></button>
+      </div>`
+    : `<p class="wa-empty">Ongeza dereva kwenye Drivers ili kushare oda.</p>`;
+  return `<div class="post-accept-tools">
+    <button class="btn maps-btn" type="button" data-act="open-maps" data-id="${esc(item.id)}">${uiIcon('map')}<span>Ramani</span><em>Open Maps</em></button>
+    ${waBlock}
+  </div>`;
 }
 
 function moneyPairCell(item) {
@@ -475,9 +535,7 @@ function orderFacts(item) {
     <div><dt>Bei ya usafirishaji</dt><dd>${shippingFee > 0 ? money(shippingFee) : 'Bado haijawekwa'}</dd></div>
     <div><dt>Safari</dt><dd>${esc(schedule || '—')}</dd></div>
   </dl>
-  <div class="actions map-actions">
-    <a class="btn dark small" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Open Google Maps</a>
-  </div>`;
+  ${contactsOpen(item) ? postAcceptTools(item) : ''}`;
 }
 function cashOf(order) {
   const source = `${order.totalLabel || ''} ${order.fareLabel || ''} ${order.cashExpected || ''}`.replace(/,/g, '');
@@ -2191,6 +2249,7 @@ function uiIcon(name) {
     map: '<path d="M9 4 3 6.5V20l6-2.5L15 20l6-2.5V4l-6 2.5L9 4z"/><path d="M9 4v13.5M15 6.5V20"/>',
     pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5z"/>',
     arrow: '<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>',
+    whatsapp: '<path d="M12 3.2A8.8 8.8 0 0 0 4.4 16.1L3 21l5-1.3A8.8 8.8 0 1 0 12 3.2z"/><path d="M9.4 8.7c.2-.4.4-.4.6-.4h.5c.2 0 .3 0 .4.3l.7 1.7c.1.2 0 .4-.1.5l-.4.5c-.1.1-.1.3 0 .5.3.5.9 1.2 1.5 1.6.4.3.7.3.9.2l.7-.4c.2-.1.4-.1.5 0l1.6.9c.2.1.3.3.3.5 0 .6-.5 1.4-1 1.6-.4.2-1 .3-1.6.1-1.4-.4-2.9-1.5-4-3-1-1.3-1.6-2.7-1.7-4.1 0-.6.1-1.1.4-1.4z"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 }
@@ -2778,18 +2837,18 @@ function transitOrdersPage() {
 }
 
 function whatsappOrderText(item) {
-  return [
-    `HAUL cargo · ${item.orderNumber || item.id.slice(0, 8)}`,
-    `Inatoka: ${item.pickupLabel || item.origin || '—'}`,
-    `Inaenda: ${item.destination || item.dropoffLabel || '—'}`,
-    `Mzigo: ${item.parcelDescription || 'Cargo'}${item.weightKg ? ` · ${item.weightKg} kg` : ''}`,
-    `Bei ya usafirishaji: ${priceOf(item) > 0 ? money(priceOf(item)) : 'Bado'}`,
-    `Thamani ya bidhaa: ${declaredValueOf(item) ? money(declaredValueOf(item)) : '—'}`,
-    item.pickupLatitude && item.pickupLongitude
-      ? `Map: https://www.google.com/maps/dir/?api=1&destination=${item.pickupLatitude},${item.pickupLongitude}`
-      : `Map: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.pickupLabel || item.destination || 'Dar es Salaam')}`,
-    `Details: ${location.origin}${location.pathname}#/assignment/${item.id}`,
-  ].join('\n');
+  const coords = pickupCoords(item);
+  const fee = priceOf(item);
+  const lines = [
+    `HAUL cargo · #${item.orderNumber || item.parcelCode || item.id.slice(0, 8)}`,
+    `From → To: ${item.pickupLabel || item.origin || '—'} → ${item.destination || item.dropoffLabel || '—'}`,
+    `Pickup: ${item.pickupLabel || item.origin || '—'}`,
+  ];
+  if (fee > 0) lines.push(`Shipping fee: ${money(fee)}`);
+  if (coords) {
+    lines.push(`Maps: https://www.google.com/maps?q=${coords.lat},${coords.lng}`);
+  }
+  return lines.join('\n');
 }
 
 function orderPager(count, page, pages) {
@@ -2814,10 +2873,6 @@ function orderBrief(item, opts = {}) {
   const busy = state.stageBusy === item.id;
   const acceptGate = !owned && quoteAccepted(item)
     ? `<div class="accept-gate"><p class="accept-title">Mteja amekubali</p><button class="btn primary" type="button" data-act="accept" data-id="${esc(item.id)}" ${busy ? 'disabled' : ''}>Accept</button></div>`
-    : '';
-  // After agent Accept: always offer Maps (coords preferred, pickup label fallback).
-  const mapBtn = owned
-    ? `<a class="btn primary map-btn" href="${esc(pickupMapUrl(item))}" target="_blank" rel="noopener">Google Maps</a>`
     : '';
   return `<article class="order-brief">
     <div class="route-visual">
@@ -2851,6 +2906,7 @@ function orderBrief(item, opts = {}) {
         </div>
       </div>
     </div>
+    ${owned ? postAcceptTools(item) : ''}
     ${photoStrip(item)}
     <div class="goods-tile">
       <span class="goods-ico">${uiIcon('box')}</span>
@@ -2862,7 +2918,6 @@ function orderBrief(item, opts = {}) {
     ${unquotedWaitMarkup(item)}
     ${quotePanel(item, { force: Boolean(opts.forceQuote) && !quoteAccepted(item) })}
     ${acceptGate}
-    ${mapBtn}
     ${owned ? stageAction(item) : ''}
     ${opts.full && owned ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}" aria-label="Receipt">${uiIcon('box')} Receipt</a></div>` : ''}
   </article>`;
@@ -4158,6 +4213,34 @@ async function onViewClick(event) {
     return;
   }
   const id = actBtn.dataset.id || route().id;
+  if (act === 'open-maps') {
+    const local = state.shipments.find((item) => item.id === id) || { id, ...(state.pendingStages[id] || {}) };
+    openPickupMaps(local);
+    return;
+  }
+  if (act === 'share-wa') {
+    const local = state.shipments.find((item) => item.id === id) || { id, ...(state.pendingStages[id] || {}) };
+    const drivers = knownDrivers();
+    if (!drivers.length) {
+      showToast('Ongeza dereva kwenye Drivers kwanza.');
+      return;
+    }
+    const select = actBtn.closest('.post-accept-tools')?.querySelector('select[data-wa-for]');
+    const driverId = String(select?.value || actBtn.dataset.driver || '').trim();
+    const driver = drivers.find((item) => item.id === driverId);
+    if (!driver?.phone) {
+      showToast('Chagua dereva kutoka kwenye orodha.');
+      return;
+    }
+    window.open(whatsappHref(driver.phone, whatsappOrderText(local)), '_blank', 'noopener');
+    updateDoc(doc(db, 'carrierShipments', id), {
+      assignedDriverId: driver.id,
+      assignedDriverName: driver.name || '',
+      assignedDriverPhone: driver.phone,
+      driverDispatchedAt: serverTimestamp(),
+    }).catch(() => undefined);
+    return;
+  }
   if (act === 'mark-loaded') {
     await applyManifestMark(id, 'loaded');
     return;
@@ -4275,7 +4358,20 @@ async function onViewClick(event) {
       try {
         const payload = await portalCall(path, body);
         await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
-        const party = payload?.party && typeof payload.party === 'object' ? partyPatchFromSource({ id, ...current }, payload.party) : {};
+        const live = { id, ...current, ...(state.pendingStages[id] || {}) };
+        const party = payload?.party && typeof payload.party === 'object' ? partyPatchFromSource(live, payload.party) : {};
+        // Accept party may be the first place pickup coords appear — force them onto the desk row.
+        if (payload?.party && typeof payload.party === 'object') {
+          const lat = Number(payload.party.pickupLatitude ?? payload.party.pickupLat);
+          const lng = Number(payload.party.pickupLongitude ?? payload.party.pickupLng);
+          if (Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+            party.pickupLatitude = lat;
+            party.pickupLongitude = lng;
+          }
+          if (payload.party.pickupLabel && !String(party.pickupLabel || live.pickupLabel || '').trim()) {
+            party.pickupLabel = String(payload.party.pickupLabel).trim();
+          }
+        }
         const row = rememberAcceptedOrder(id, party);
         if (row) {
           if (Object.keys(party).length) applyPartyPatch(row, party);
