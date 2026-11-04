@@ -140,6 +140,7 @@ const state = {
   payFlow: null,
   payBusy: false,
   payOpening: false,
+  editingDriverId: '',
 };
 
 let countdownTimer = null;
@@ -3049,34 +3050,102 @@ function whatsappHref(phone, text) {
   return `https://wa.me/${intl}?text=${encodeURIComponent(text)}`;
 }
 
+function driverStatusLabel(driver) {
+  const raw = String(driver?.status || '').trim().toLowerCase();
+  if (raw === 'inactive' || raw === 'suspended' || raw === 'off') return { key: 'off', label: 'Haipo' };
+  return { key: 'on', label: 'Hai' };
+}
+
 function driversPage() {
-  const drivers = state.drivers || [];
+  const drivers = [...(state.drivers || [])].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'sw'));
   const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus !== 'delivered');
-  const driverOptions = drivers.map((driver) => `<option value="${esc(driver.id)}">${esc(driver.name || 'Driver')} · ${esc(driver.phone || '')}</option>`).join('');
-  return `<section class="panel"><h2>Add driver</h2>
-    <p class="muted">Your company drivers receive orders on WhatsApp with shipment details and a Google Maps link.</p>
-    <form id="driverForm" class="form-grid">
-      <input name="name" placeholder="Driver name" required />
-      <input name="phone" placeholder="WhatsApp phone 07…" required />
-      <input name="vehicle" placeholder="Vehicle / plate" />
-      <button class="btn primary" type="submit">Add driver</button>
-    </form>
-  </section>
-  <section class="panel"><h2>Send order via WhatsApp</h2>
-    ${drivers.length && owned.length ? `<form id="dispatchForm" class="form-grid">
-      <select name="driverId" required>${driverOptions}</select>
-      <select name="orderId" required>${owned.map((item) => `<option value="${esc(item.id)}">${esc(item.orderNumber || item.id.slice(0, 8))} · ${esc(item.destination || '')}</option>`).join('')}</select>
-      <button class="btn primary" type="submit">Open WhatsApp</button>
-    </form>` : '<p class="empty">Add a driver and accept an order first.</p>'}
-  </section>
-  <section class="panel"><h2>Drivers</h2>
-    ${drivers.map((driver) => `<article class="cargo-item">
-      <div class="cargo-item-body"><strong>${esc(driver.name || 'Driver')}</strong>
-        <span class="cargo-item-meta">${esc(driver.phone || '')}${driver.vehicle ? ` · ${esc(driver.vehicle)}` : ''}</span>
+  const editing = drivers.find((driver) => driver.id === state.editingDriverId) || null;
+  const driverOptions = drivers.map((driver) => `<option value="${esc(driver.id)}">${esc(driver.name || 'Dereva')} · ${esc(driver.phone || '')}</option>`).join('');
+  const list = drivers.length
+    ? `<ul class="drv-list">${drivers.map((driver) => {
+      const status = driverStatusLabel(driver);
+      return `<li class="drv-card">
+        <div class="drv-avatar" aria-hidden="true">${esc(String(driver.name || 'D').trim().slice(0, 1).toUpperCase() || 'D')}</div>
+        <div class="drv-copy">
+          <div class="drv-top">
+            <strong>${esc(driver.name || 'Dereva')}</strong>
+            <span class="drv-status drv-status--${status.key}">${esc(status.label)}</span>
+          </div>
+          <p class="drv-meta">${esc(driver.phone || 'Hakuna simu')}${driver.vehicle ? ` · ${esc(driver.vehicle)}` : ''}</p>
+        </div>
+        <div class="drv-actions">
+          <button class="btn line small" type="button" data-act="edit-driver" data-id="${esc(driver.id)}">Hariri</button>
+          <button class="btn line small" type="button" data-act="remove-driver" data-id="${esc(driver.id)}">Ondoa</button>
+        </div>
+      </li>`;
+    }).join('')}</ul>`
+    : `<div class="drv-empty">
+        <p class="lp-kicker">Hakuna madereva</p>
+        <h3>Anza kwa kuongeza dereva</h3>
+        <p class="muted">Madereva waliorekodiwa hapa ndio wanaopata oda kupitia WhatsApp na Google Maps.</p>
+        <a class="btn drv-cta" href="#driverForm">Ongeza dereva</a>
+      </div>`;
+
+  return `<section class="drv-hero panel">
+      <div class="drv-hero-copy">
+        <p class="lp-kicker">Drivers</p>
+        <h1>Madereva wa kampuni</h1>
+        <p class="muted">Simamia madereva wa kampuni yako. Orodha inatokana na data halisi — hakuna madereva bandia.</p>
       </div>
-      <div class="cargo-item-actions"><button class="btn line small" data-act="remove-driver" data-id="${esc(driver.id)}" type="button">Remove</button></div>
-    </article>`).join('') || '<p class="empty">No drivers yet.</p>'}
-  </section>`;
+      <div class="drv-hero-side">
+        <strong>${drivers.length}</strong>
+        <span>${drivers.length === 1 ? 'dereva' : 'madereva'}</span>
+        <a class="btn drv-cta" href="#driverForm">Ongeza dereva</a>
+      </div>
+    </section>
+
+    <section class="panel drv-panel" id="driverRegister">
+      <div class="section-head">
+        <h2>${editing ? 'Hariri dereva' : 'Sajili dereva'}</h2>
+        <p class="muted">Jina, simu ya WhatsApp, na gari / namba ya plati.</p>
+      </div>
+      <form id="driverForm" class="drv-form">
+        <label class="drv-field"><span>Jina</span>
+          <input name="name" value="${esc(editing?.name || '')}" placeholder="Jina la dereva" required autocomplete="name" />
+        </label>
+        <label class="drv-field"><span>Simu (WhatsApp)</span>
+          <input name="phone" value="${esc(editing?.phone || '')}" placeholder="07…" required inputmode="tel" autocomplete="tel" />
+        </label>
+        <label class="drv-field"><span>Gari / plati</span>
+          <input name="vehicle" value="${esc(editing?.vehicle || '')}" placeholder="mf. T 123 ABC / Canter" autocomplete="off" />
+        </label>
+        <div class="drv-form-actions">
+          ${editing ? `<button class="btn line" type="button" data-act="cancel-edit-driver">Ghairi</button>` : ''}
+          <button class="btn drv-cta" type="submit">${editing ? 'Hifadhi mabadiliko' : 'Ongeza dereva'}</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel drv-panel">
+      <div class="section-head">
+        <h2>Orodha ya madereva</h2>
+        <p class="muted">Jina · simu · gari · hali</p>
+      </div>
+      ${list}
+    </section>
+
+    <section class="panel drv-panel">
+      <div class="section-head">
+        <h2>Tuma oda kwa WhatsApp</h2>
+        <p class="muted">Chagua dereva na oda inayoendelea.</p>
+      </div>
+      ${drivers.length && owned.length ? `<form id="dispatchForm" class="drv-form drv-form--dispatch">
+        <label class="drv-field"><span>Dereva</span>
+          <select name="driverId" required>${driverOptions}</select>
+        </label>
+        <label class="drv-field"><span>Oda</span>
+          <select name="orderId" required>${owned.map((item) => `<option value="${esc(item.id)}">${esc(item.orderNumber || item.id.slice(0, 8))} · ${esc(item.destination || '')}</option>`).join('')}</select>
+        </label>
+        <div class="drv-form-actions">
+          <button class="btn primary" type="submit">Fungua WhatsApp</button>
+        </div>
+      </form>` : `<p class="empty">${!drivers.length ? 'Ongeza dereva kwanza.' : 'Kubali oda kwanza ili uweze kutuma kwa WhatsApp.'}</p>`}
+    </section>`;
 }
 
 const TIER_RULES = [
@@ -3757,6 +3826,20 @@ function btnBusyLabel(label) {
   return `<span class="btn-inline-spinner" aria-hidden="true"></span><span>${label}</span>`;
 }
 
+function markPayBtnBusy(btn, label) {
+  if (!(btn instanceof HTMLElement)) return;
+  btn.classList.add('is-busy', 'is-pressed');
+  btn.setAttribute('aria-busy', 'true');
+  // Keep enabled attribute off the critical path — :disabled styles used to kill pressed feedback.
+  btn.innerHTML = btnBusyLabel(label);
+}
+
+function flushPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}
+
 function openPayFlow(seed = {}) {
   const snap = debtSnapshot();
   const outstanding = Math.max(0, Math.round(Number(seed.amount ?? snap.outstanding) || 0));
@@ -3855,17 +3938,17 @@ function payFlowSheet(snap) {
       <p class="muted debt-note">Debt drops only after TrivaPesa confirms success. Duplicate pushes are blocked while a payment is in flight.</p>
       <div class="debt-sheet-actions">
         <button class="btn line" type="button" data-pay="back-method" ${busy ? 'disabled' : ''}>Back</button>
-        <button class="btn primary${busy ? ' is-busy is-pressed' : ''}" type="button" data-pay="confirm" ${busy || amount < 100 ? 'disabled' : ''} aria-busy="${busy ? 'true' : 'false'}">${busy ? btnBusyLabel('Inatuma USSD…') : 'Confirm &amp; Pay'}</button>
+        <button class="btn primary${busy ? ' is-busy is-pressed' : ''}" type="button" data-pay="confirm" ${busy || amount < 100 ? 'disabled' : ''} aria-busy="${busy ? 'true' : 'false'}">${busy ? btnBusyLabel('Inatuma…') : 'Confirm &amp; Pay'}</button>
       </div>
     </div>`;
   } else if (flow.step === 'confirm') {
     const pushing = busy && !flow.orderId;
     const initiating = flow.status === 'creating' || flow.status === 'pushing' || (Boolean(flow.orderId) && !flow.reference);
     const waitTitle = pushing || initiating
-      ? (flow.reference ? 'Angalia simu yako' : 'Inatuma USSD…')
+      ? (flow.reference ? 'Angalia simu yako' : 'Inatuma…')
       : 'Waiting for confirmation';
     const waitCopy = flow.message || (pushing || initiating
-      ? (flow.reference ? 'Angalia simu — USSD push imetumwa' : 'Inatuma USSD…')
+      ? (flow.reference ? 'Angalia simu — USSD push imetumwa' : 'Inatuma…')
       : payWaitHint(flow));
     body = `<div class="debt-step debt-wait" aria-live="polite" aria-busy="true">
       <div class="debt-spinner" aria-hidden="true"></div>
@@ -3977,7 +4060,7 @@ function paymentsPage() {
           <div><span>Unpaid orders</span><strong>${snap.unpaidOrders.length}</strong></div>
         </div>
         <div class="debt-hero-actions">
-          <button class="btn debt-pay-btn${state.payOpening ? ' is-busy is-pressed' : ''}" type="button" data-pay="open" ${snap.outstanding < 100 || state.payOpening ? 'disabled' : ''} aria-busy="${state.payOpening ? 'true' : 'false'}">${state.payOpening ? btnBusyLabel('Opening…') : 'Pay Now'}</button>
+          <button class="btn debt-pay-btn${state.payOpening ? ' is-busy is-pressed' : ''}" type="button" data-pay="open" ${snap.outstanding < 100 || state.payOpening ? 'disabled' : ''} aria-busy="${state.payOpening ? 'true' : 'false'}">${state.payOpening ? btnBusyLabel('Inafungua…') : 'Pay Now'}</button>
           ${pendingOpen ? `<button class="btn line" type="button" data-pay="resume">Resume pending payment</button>` : ''}
         </div>
         ${snap.outstanding < 100 ? '<p class="muted debt-zero">No outstanding Haul commission right now.</p>' : ''}
@@ -4115,9 +4198,10 @@ async function initiateDebtPayment() {
   state.payBusy = true;
   flow.step = 'confirm';
   flow.status = 'pushing';
-  flow.message = 'Inatuma USSD…';
-  showToast('Inatuma USSD…');
+  flow.message = 'Inatuma…';
+  showToast('Inatuma…');
   render();
+  await flushPaint();
   try {
     const unpaidOrders = (snap.unpaidOrders || []).map((row) => String(row.item?.id || '')).filter(Boolean).slice(0, 40);
     const payload = await postCommissionUssd({
@@ -4322,20 +4406,29 @@ function pollDebtPayment(orderId) {
   }, 3000);
 }
 
+function paintPayBtnPress(event) {
+  const btn = event.target.closest('[data-pay="open"], [data-pay="confirm"]');
+  if (!btn || btn.hasAttribute('disabled') || btn.classList.contains('is-busy')) return;
+  if (btn.dataset.pay === 'open') {
+    if (state.payOpening || state.payBusy || state.payFlow) return;
+    markPayBtnBusy(btn, 'Inafungua…');
+    return;
+  }
+  if (state.payBusy) return;
+  markPayBtnBusy(btn, 'Inatuma…');
+}
+
 async function handleDebtPayClick(event) {
   const btn = event.target.closest('[data-pay]');
   if (!btn) return false;
   const act = btn.dataset.pay;
   const snap = debtSnapshot();
   if (act === 'open') {
-    if (state.payOpening || state.payBusy) return true;
+    if (state.payBusy) return true;
     state.payOpening = true;
-    btn.classList.add('is-busy', 'is-pressed');
-    btn.setAttribute('aria-busy', 'true');
-    btn.setAttribute('disabled', 'true');
-    btn.innerHTML = btnBusyLabel('Opening…');
-    // Paint pressed/busy state first, then open the sheet.
-    requestAnimationFrame(() => openPayFlow({ amount: snap.outstanding, mode: 'full' }));
+    markPayBtnBusy(btn, 'Inafungua…');
+    // Open synchronously from local debtSnapshot — never await finance refetch first.
+    openPayFlow({ amount: snap.outstanding, mode: 'full' });
     return true;
   }
   if (act === 'resume') {
@@ -4430,10 +4523,8 @@ async function handleDebtPayClick(event) {
   }
   if (act === 'confirm') {
     if (state.payBusy) return true;
-    btn.classList.add('is-busy', 'is-pressed');
-    btn.setAttribute('aria-busy', 'true');
-    btn.setAttribute('disabled', 'true');
-    btn.innerHTML = btnBusyLabel('Inatuma USSD…');
+    markPayBtnBusy(btn, 'Inatuma…');
+    await flushPaint();
     try {
       await initiateDebtPayment();
     } catch (error) {
@@ -4847,7 +4938,7 @@ async function render() {
   };
   $('pageTitle').textContent = titles[page] || 'Dashboard';
   const viewEl = $('view');
-  viewEl.classList.toggle('wide', ['fares', 'payments', 'fedha', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment'].includes(page));
+  viewEl.classList.toggle('wide', ['fares', 'payments', 'fedha', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment', 'drivers', 'trips', 'vehicles'].includes(page));
   const rows = state.shipments.filter(mine);
   let html = '';
   if (!state.carrier && !state.isAdmin && page !== 'desk' && page !== 'uthibitisho') {
@@ -5544,10 +5635,26 @@ async function onViewClick(event) {
     await updateDoc(ref, { customerIssue: note });
     await updateDoc(doc(db, 'carriers', state.carrier.id), { customerIssues: increment(1) });
   }
+  if (act === 'edit-driver') {
+    const driver = (state.drivers || []).find((item) => item.id === id);
+    if (!driver || driver.carrierId !== state.carrier?.id) throw new Error('Driver not found.');
+    state.editingDriverId = id;
+    render();
+    document.getElementById('driverForm')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.querySelector('#driverForm input[name="name"]')?.focus();
+    return;
+  }
+  if (act === 'cancel-edit-driver') {
+    state.editingDriverId = '';
+    render();
+    return;
+  }
   if (act === 'remove-driver') {
     const driver = (state.drivers || []).find((item) => item.id === id);
     if (!driver || driver.carrierId !== state.carrier?.id) throw new Error('Driver not found.');
+    if (!window.confirm(`Ondoa ${driver.name || 'dereva'}?`)) return;
     await deleteDoc(doc(db, 'carrierDrivers', id));
+    if (state.editingDriverId === id) state.editingDriverId = '';
     return;
   }
   if (act === 'fail') {
@@ -5576,14 +5683,33 @@ async function onViewSubmit(event) {
   if (form.id === 'driverForm') {
     const id = await requireCarrier();
     const phone = String(data.get('phone') || '').trim();
+    const name = String(data.get('name') || '').trim();
+    const vehicle = String(data.get('vehicle') || '').trim();
+    if (!name) throw new Error('Weka jina la dereva.');
     if (phone.replace(/\D/g, '').length < 9) throw new Error('Enter a valid driver phone.');
-    await addDoc(collection(db, 'carrierDrivers'), {
-      carrierId: id,
-      name: String(data.get('name') || '').trim(),
-      phone,
-      vehicle: String(data.get('vehicle') || '').trim(),
-      createdAt: serverTimestamp(),
-    });
+    const editingId = String(state.editingDriverId || '').trim();
+    if (editingId) {
+      const existing = (state.drivers || []).find((item) => item.id === editingId);
+      if (!existing || existing.carrierId !== id) throw new Error('Driver not found.');
+      await updateDoc(doc(db, 'carrierDrivers', editingId), {
+        name,
+        phone,
+        vehicle,
+        updatedAt: serverTimestamp(),
+      });
+      state.editingDriverId = '';
+      showToast('Dereva amesasishwa.');
+    } else {
+      await addDoc(collection(db, 'carrierDrivers'), {
+        carrierId: id,
+        name,
+        phone,
+        vehicle,
+        status: 'active',
+        createdAt: serverTimestamp(),
+      });
+      showToast('Dereva ameongezwa.');
+    }
     form.reset();
   }
   if (form.id === 'dispatchForm') {
@@ -5982,6 +6108,10 @@ function bindAuth() {
     if (event.target.closest('[data-lightbox-close]')) {
       document.getElementById('photoLightbox').hidden = true;
     }
+  });
+  $('view').addEventListener('pointerdown', (event) => {
+    if (event.button != null && event.button !== 0) return;
+    paintPayBtnPress(event);
   });
   $('view').addEventListener('click', (event) => {
     const editQuote = event.target.closest('[data-edit-quote]');

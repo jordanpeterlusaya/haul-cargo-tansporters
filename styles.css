@@ -88,13 +88,13 @@ img { max-width: 100%; display: block; }
   justify-content: center;
   gap: 8px;
   line-height: 1.2;
-  transition: background 160ms var(--ease), color 160ms var(--ease), opacity 160ms var(--ease), transform 120ms var(--ease), filter 120ms var(--ease), box-shadow 120ms var(--ease);
+  transition: background 80ms var(--ease), color 80ms var(--ease), opacity 80ms var(--ease), transform 80ms var(--ease), filter 80ms var(--ease), box-shadow 80ms var(--ease);
 }
 .btn.primary { background: var(--haul); color: #fff; }
 .btn.primary:hover { filter: brightness(1.06); }
-.btn.primary:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn.primary:disabled:not(.is-busy) { opacity: 0.55; cursor: not-allowed; }
 .btn:active:not(:disabled),
-.btn.is-pressed:not(:disabled) {
+.btn.is-pressed {
   transform: scale(0.97);
   filter: brightness(0.92);
 }
@@ -102,6 +102,12 @@ img { max-width: 100%; display: block; }
   pointer-events: none;
   opacity: 0.88;
   cursor: progress;
+}
+.btn.is-busy:disabled {
+  opacity: 0.88;
+  cursor: progress;
+  transform: scale(0.97);
+  filter: brightness(0.92);
 }
 .btn-inline-spinner {
   width: 16px;
@@ -3765,24 +3771,33 @@ body:has(#app:not(.hidden)) {
   color: #111;
   font: 800 16px/1 var(--font-body);
   box-shadow: 0 10px 24px rgba(245, 224, 0, 0.35);
+  transition: transform 80ms var(--ease), filter 80ms var(--ease), box-shadow 80ms var(--ease), opacity 80ms var(--ease);
 }
 #app .debt-pay-btn:hover { filter: brightness(0.98); }
 #app .debt-pay-btn:active:not(:disabled),
-#app .debt-pay-btn.is-pressed {
+#app .debt-pay-btn.is-pressed,
+#app .debt-pay-btn.is-busy {
   transform: scale(0.97);
   filter: brightness(0.9);
   box-shadow: 0 4px 12px rgba(245, 224, 0, 0.28);
 }
 #app .debt-pay-btn.is-busy {
-  opacity: 0.88;
+  opacity: 0.92;
   cursor: progress;
   pointer-events: none;
 }
-#app .debt-pay-btn:disabled {
+#app .debt-pay-btn:disabled:not(.is-busy) {
   opacity: 0.45;
   box-shadow: none;
   cursor: not-allowed;
   transform: none;
+}
+#app .debt-pay-btn.is-busy:disabled {
+  opacity: 0.92;
+  cursor: progress;
+  transform: scale(0.97);
+  filter: brightness(0.9);
+  box-shadow: 0 4px 12px rgba(245, 224, 0, 0.28);
 }
 #app .debt-zero { margin: 14px 0 0; }
 #app .debt-panel {
@@ -3870,7 +3885,7 @@ body:has(#app:not(.hidden)) {
   border-radius: 20px 20px 16px 16px;
   box-shadow: 0 24px 60px rgba(17, 17, 17, 0.28);
   padding: 22px 22px 24px;
-  animation: debtSheetIn 220ms var(--ease-out, ease);
+  animation: debtSheetIn 100ms var(--ease-out, ease);
 }
 @keyframes debtSheetIn {
   from { opacity: 0; transform: translateY(18px); }
@@ -4109,4 +4124,187 @@ body:has(#app:not(.hidden)) {
     border-radius: 20px 20px 0 0;
     max-height: 92vh;
   }
+}
+
+/* —— Drivers (professional) —— */
+#app .drv-hero {
+  display: grid;
+  gap: 20px;
+  align-items: end;
+  margin-bottom: 16px;
+  background:
+    linear-gradient(180deg, rgba(245, 224, 0, 0.14), rgba(255, 255, 255, 0) 42%),
+    var(--surface);
+}
+#app .drv-hero-copy h1 {
+  margin: 4px 0 8px;
+  font: 800 clamp(1.7rem, 4vw, 2.35rem)/1.05 var(--font-display, Syne, sans-serif);
+  letter-spacing: -0.04em;
+}
+#app .drv-hero-copy .muted { max-width: 54ch; }
+#app .drv-hero-copy code {
+  font-size: 0.92em;
+  background: #f4f4f0;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+#app .drv-hero-side {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+#app .drv-hero-side strong {
+  font: 800 2rem/1 var(--font-display, Syne, sans-serif);
+  letter-spacing: -0.04em;
+}
+#app .drv-hero-side span {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+#app .drv-cta {
+  background: var(--yellow, #f5e000);
+  color: #111;
+  font-weight: 800;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(245, 224, 0, 0.28);
+}
+#app .drv-cta:hover { filter: brightness(0.98); }
+#app .drv-panel { margin-bottom: 16px; }
+#app .drv-panel .section-head {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+#app .drv-form {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+#app .drv-form--dispatch { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
+#app .drv-field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+#app .drv-field span { font-weight: 650; }
+#app .drv-field input,
+#app .drv-field select {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: #fff;
+}
+#app .drv-field input:focus,
+#app .drv-field select:focus {
+  outline: none;
+  border-color: #d6c400;
+  box-shadow: 0 0 0 3px rgba(245, 224, 0, 0.28);
+}
+#app .drv-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  grid-column: 1 / -1;
+}
+#app .drv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+#app .drv-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+#app .drv-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(245, 224, 0, 0.35);
+  color: #111;
+  font-weight: 800;
+}
+#app .drv-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+#app .drv-top strong {
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+#app .drv-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+#app .drv-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+#app .drv-status--on { background: #e8f6ee; color: #176b42; }
+#app .drv-status--off { background: #f4f4f0; color: #6b6b66; }
+#app .drv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+#app .drv-empty {
+  text-align: center;
+  padding: 36px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: #fcfcfa;
+}
+#app .drv-empty h3 {
+  margin: 6px 0 8px;
+  font: 800 1.35rem/1.15 var(--font-display, Syne, sans-serif);
+  letter-spacing: -0.03em;
+}
+#app .drv-empty .muted {
+  max-width: 40ch;
+  margin: 0 auto 18px;
+}
+@media (min-width: 860px) {
+  #app .drv-hero {
+    grid-template-columns: 1fr auto;
+  }
+}
+@media (max-width: 820px) {
+  #app .drv-form,
+  #app .drv-form--dispatch {
+    grid-template-columns: 1fr;
+  }
+  #app .drv-card {
+    grid-template-columns: auto 1fr;
+  }
+  #app .drv-actions {
+    grid-column: 1 / -1;
+    justify-content: stretch;
+  }
+  #app .drv-actions .btn { flex: 1 1 auto; }
 }
