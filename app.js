@@ -442,11 +442,8 @@ async function ensureCargoPhotos(item) {
 }
 
 function pickupMapUrl(item) {
-  const lat = Number(item?.pickupLatitude);
-  const lng = Number(item?.pickupLongitude);
-  if (Number.isFinite(lat) && Number.isFinite(lng)) {
-    return `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
-  }
+  const coords = pickupCoords(item);
+  if (coords) return `https://www.google.com/maps?q=${encodeURIComponent(`${coords.lat},${coords.lng}`)}`;
   const query = item?.pickupLabel || item?.origin || item?.destination || 'Dar es Salaam';
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
@@ -1312,10 +1309,19 @@ function listen() {
   const publishShipments = () => {
     const map = new Map();
     [...buckets.offered, ...buckets.owned].forEach((item) => map.set(item.id, item));
+    // Accept can change status before the owned query delivers the doc. Keep the open card.
+    const prior = state.shipments || [];
+    Object.keys(state.pendingStages || {}).forEach((id) => {
+      if (map.has(id)) return;
+      const prev = prior.find((item) => item.id === id);
+      if (prev) map.set(id, { ...prev });
+    });
     state.shipments = [...map.values()].map((item) => {
       const pending = state.pendingStages[item.id];
       if (!pending) return item;
-      if (item.shipmentStatus === pending.shipmentStatus && String(item.trackStep || '') === String(pending.trackStep || '')) {
+      const statusLanded = item.shipmentStatus === pending.shipmentStatus && String(item.trackStep || '') === String(pending.trackStep || '');
+      const ownerLanded = !pending.carrierId || item.carrierId === pending.carrierId;
+      if (statusLanded && ownerLanded) {
         delete state.pendingStages[item.id];
         delete state.stageBusyIds[item.id];
         return item;
@@ -2087,15 +2093,31 @@ const ORDER_TABS = [
   ['cancelled', 'Cancelled'],
 ];
 
+const ACTIVE_ACCEPT_STATUSES = ['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus'];
+
+function offeredOrOwned(item) {
+  const mineId = state.carrier?.id;
+  if (!mineId || !item) return false;
+  return item.carrierId === mineId || item.offeredCarrierId === mineId;
+}
+
+function agentTookOrder(item) {
+  if (!offeredOrOwned(item)) return false;
+  if (item.carrierId === state.carrier.id) return true;
+  if (item.agentAcceptedAt && item.offeredCarrierId === state.carrier.id) return true;
+  return item.offeredCarrierId === state.carrier.id && ACTIVE_ACCEPT_STATUSES.includes(String(item.shipmentStatus || ''));
+}
+
 function orderBucket(item) {
   const mineId = state.carrier?.id;
   const status = String(item.shipmentStatus || '');
   const step = String(item.trackStep || '');
+  if (!mineId || !offeredOrOwned(item)) return '';
   if (status === 'cancelled') return 'cancelled';
   if (status === 'delivered' || step === 'handed') return 'delivered';
   if (status === 'in_transit' || status === 'arrived' || step === 'transit' || step === 'arrived' || ['at_checkpoint', 'near_destination'].includes(item.journeyStatus)) return 'transit';
-  if (item.carrierId === mineId) return 'verified';
-  if (status === 'assigned' && item.offeredCarrierId === mineId) return 'new';
+  if (item.carrierId === mineId || agentTookOrder(item)) return 'verified';
+  if (item.offeredCarrierId === mineId) return 'new';
   return '';
 }
 
@@ -2180,17 +2202,24 @@ function maskedPhone(phone) {
 }
 
 function agentOwns(item) {
-  return Boolean(item && state.carrier?.id && item.carrierId === state.carrier.id);
+  return agentTookOrder(item);
 }
 
 function contactsOpen(item) {
   return agentOwns(item);
 }
 
+function pickupCoords(item) {
+  const lat = Number(item?.pickupLatitude ?? item?.pickupLat);
+  const lng = Number(item?.pickupLongitude ?? item?.pickupLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  if (lat === 0 && lng === 0) return null;
+  return { lat, lng };
+}
+
 function hasPickupCoords(item) {
-  const lat = Number(item?.pickupLatitude);
-  const lng = Number(item?.pickupLongitude);
-  return Number.isFinite(lat) && Number.isFinite(lng);
+  return Boolean(pickupCoords(item));
 }
 
 function personAvatar(name, tone) {
@@ -2203,7 +2232,94 @@ function phoneVisual(phone, open) {
   if (!open) {
     return `<p class="party-phone is-locked">${uiIcon('lock')}<span>${esc(maskedPhone(phone))}</span></p>`;
   }
-  return `<p class="party-phone">${uiIcon('phone')}<span>${phoneLine(phone)}</span></p>`;
+  const raw = String(phone || '').trim();
+  const body = raw ? phoneLine(raw) : '—';
+  return `<p class="party-phone">${uiIcon('phone')}<span class="simu-label">Simu</span><span>${body}</span></p>`;
+}
+
+const partyEnrichPending = Object.create(null);
+
+function partyMissing(item) {
+  const senderPhone = String(item?.senderPhone || item?.customerPhone || '').trim();
+  const recipientPhone = String(item?.recipientPhone || '').trim();
+  return !senderPhone || !recipientPhone || !String(item?.senderName || item?.customerName || '').trim() || !String(item?.recipientName || '').trim() || !hasPickupCoords(item);
+}
+
+async function ensureAcceptedParty(item) {
+  if (!item?.id || !agentTookOrder(item) || !partyMissing(item)) return item;
+  if (partyEnrichPending[item.id]) return item;
+  partyEnrichPending[item.id] = true;
+  try {
+    const orderId = String(item.orderId || item.id).trim();
+    const snap = await getDoc(doc(db, 'orders', orderId));
+    if (!snap.exists()) return item;
+    const order = snap.data() || {};
+    const patch = {};
+    const senderPhone = String(order.senderPhone || order.customerPhone || order.phoneNumber || '').trim();
+    const senderName = String(order.senderName || order.customerName || order.fullName || '').trim();
+    const recipientName = String(order.recipientName || order.receiverName || '').trim();
+    const recipientPhone = String(order.recipientPhone || order.receiverPhone || '').trim();
+    if (senderPhone && !String(item.senderPhone || item.customerPhone || '').trim()) {
+      patch.senderPhone = senderPhone;
+      patch.customerPhone = senderPhone;
+    }
+    if (senderName && !String(item.senderName || item.customerName || '').trim()) {
+      patch.senderName = senderName;
+      patch.customerName = senderName;
+    }
+    if (recipientName && !String(item.recipientName || '').trim()) patch.recipientName = recipientName;
+    if (recipientPhone && !String(item.recipientPhone || '').trim()) patch.recipientPhone = recipientPhone;
+    const lat = Number(order.pickupLatitude ?? order.pickupLat);
+    const lng = Number(order.pickupLongitude ?? order.pickupLng);
+    if (!hasPickupCoords(item) && Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+      patch.pickupLatitude = lat;
+      patch.pickupLongitude = lng;
+    }
+    if (order.pickupLabel && !item.pickupLabel) patch.pickupLabel = String(order.pickupLabel).trim();
+    const photos = cargoPhotoList(order);
+    if (photos.length && !cargoPhotoList(item).length) {
+      patch.parcelPhotoUrls = photos.slice(0, 6);
+      patch.parcelPhotoUrl = photos[0];
+    }
+    if (!Object.keys(patch).length) return item;
+    Object.assign(item, patch);
+    const idx = state.shipments.findIndex((row) => row.id === item.id);
+    if (idx >= 0) state.shipments[idx] = { ...state.shipments[idx], ...patch };
+    if (state.pendingStages[item.id]) Object.assign(state.pendingStages[item.id], patch);
+    updateDoc(doc(db, 'carrierShipments', item.id), patch).catch(() => undefined);
+    render();
+  } catch (error) {
+    console.warn('ensureAcceptedParty failed', error);
+  } finally {
+    delete partyEnrichPending[item.id];
+  }
+  return item;
+}
+
+function rememberAcceptedOrder(id, extra = {}) {
+  const optimistic = {
+    carrierId: state.carrier?.id,
+    shipmentStatus: 'accepted',
+    trackStep: 'received',
+    portalStage: 'accepted',
+    agentAcceptedAt: new Date().toISOString(),
+    ...extra,
+  };
+  state.pendingStages[id] = { ...(state.pendingStages[id] || {}), ...optimistic };
+  const row = state.shipments.find((item) => item.id === id);
+  if (row) Object.assign(row, state.pendingStages[id]);
+  state.deskOpen = id;
+  return row;
+}
+
+function showAcceptedOrder(id) {
+  state.deskOpen = id;
+  const onDesk = location.hash.startsWith('#/orders') || location.hash.startsWith('#/assignment') || route().page === 'orders' || route().page === 'assignment';
+  if (onDesk && location.hash !== '#/orders/verified') {
+    location.hash = '#/orders/verified';
+    return;
+  }
+  render();
 }
 
 function commissionMark(amount) {
@@ -2381,20 +2497,23 @@ function ordersDesk(tab) {
     state.deskTab = current;
     state.deskPage = 1;
     const kept = state.shipments.find((item) => item.id === keep);
-    state.deskOpen = kept && orderBucket(kept) === current ? keep : '';
+    const stayOpen = kept && (orderBucket(kept) === current || (orderBucket(kept) === 'verified' && (current === 'new' || current === 'verified')));
+    state.deskOpen = stayOpen ? keep : '';
   }
   const query = String(state.deskQuery || '').trim().toLowerCase();
   const fromMs = state.deskFrom ? Date.parse(`${state.deskFrom}T00:00:00`) : 0;
   const toMs = state.deskTo ? Date.parse(`${state.deskTo}T23:59:59`) : 0;
-  let rows = state.shipments.filter((item) => orderBucket(item) === current);
+  const keepAccepted = (item) => state.deskOpen === item.id && orderBucket(item) === 'verified' && (current === 'new' || current === 'verified');
+  let rows = state.shipments.filter((item) => orderBucket(item) === current || keepAccepted(item));
   if (query) {
-    rows = rows.filter((item) => [
+    rows = rows.filter((item) => keepAccepted(item) || [
       item.orderNumber, item.id, item.customerName, item.customerPhone, item.recipientName,
       item.pickupLabel, item.origin, item.destination, item.dropoffLabel, item.parcelDescription,
     ].join(' ').toLowerCase().includes(query));
   }
   if (fromMs || toMs) {
     rows = rows.filter((item) => {
+      if (keepAccepted(item)) return true;
       const ms = orderClock(item);
       if (!ms) return false;
       if (fromMs && ms < fromMs) return false;
@@ -2406,6 +2525,13 @@ function ordersDesk(tab) {
     rows.sort((a, b) => String(a.orderNumber || a.parcelCode || a.id).localeCompare(String(b.orderNumber || b.parcelCode || b.id), undefined, { numeric: true, sensitivity: 'base' }));
   } else {
     rows.sort((a, b) => orderClock(b) - orderClock(a));
+  }
+  if (state.deskOpen) {
+    const openIndex = rows.findIndex((item) => item.id === state.deskOpen);
+    if (openIndex > 0) {
+      const [pinned] = rows.splice(openIndex, 1);
+      rows.unshift(pinned);
+    }
   }
   const pageSize = 12;
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -2654,7 +2780,10 @@ function orderPager(count, page, pages) {
 
 function orderBrief(item, opts = {}) {
   const owned = agentOwns(item);
-  if (owned) void ensureCargoPhotos(item);
+  if (owned) {
+    void ensureCargoPhotos(item);
+    void ensureAcceptedParty(item);
+  }
   const value = declaredValueOf(item);
   const from = placeName(item.origin || item.pickupLabel);
   const to = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
@@ -4068,7 +4197,14 @@ async function onViewClick(event) {
     await updateDoc(ref, patch);
     await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id }, { message: 'In transit' });
     const row = state.shipments.find((item) => item.id === id);
-    if (row) Object.assign(row, { shipmentStatus: 'in_transit', trackStep: 'transit', journeyStatus: 'in_transit' });
+    state.pendingStages[id] = {
+      ...(state.pendingStages[id] || {}),
+      carrierId: state.carrier.id,
+      shipmentStatus: 'in_transit',
+      trackStep: 'transit',
+      journeyStatus: 'in_transit',
+    };
+    if (row) Object.assign(row, state.pendingStages[id]);
     state.deskOpen = id;
     if (location.hash.startsWith('#/orders') && !location.hash.startsWith('#/orders/transit')) location.hash = '#/orders/transit';
     return;
@@ -4099,23 +4235,41 @@ async function onViewClick(event) {
       }
       const needsPrice = String(current.quoteStatus || '') === 'awaiting_company' || !(Number(current.cashExpected) > 0 || amount >= 1000);
       if (needsPrice && !(amount >= 1000)) {
+        state.stageBusy = '';
         window.alert('Weka bei ya usafirishaji kabla ya kuchukua oda.');
         form?.amount?.focus();
         return;
       }
+      const previousAccept = {
+        carrierId: current.carrierId || null,
+        shipmentStatus: current.shipmentStatus || 'assigned',
+        trackStep: current.trackStep || '',
+        portalStage: current.portalStage || '',
+        agentAcceptedAt: current.agentAcceptedAt || null,
+      };
+      rememberAcceptedOrder(id);
+      showAcceptedOrder(id);
       try {
         const payload = await portalCall(path, body);
         await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
-        const row = state.shipments.find((item) => item.id === id);
-        if (row) Object.assign(row, { carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
-        state.deskOpen = id;
-        if (location.hash.startsWith('#/orders') && location.hash !== '#/orders/verified') location.hash = '#/orders/verified';
+        const row = rememberAcceptedOrder(id);
+        if (row) void ensureAcceptedParty(row);
+        showAcceptedOrder(id);
         const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
         if (note) window.alert(note);
         return;
       } catch (error) {
         const message = String(error?.message || '');
         if (!/404|not found|Cannot POST|Failed to fetch|NetworkError|Failed to make request/i.test(message)) {
+          if (!/already accepted/i.test(message)) {
+            delete state.pendingStages[id];
+            const row = state.shipments.find((item) => item.id === id);
+            if (row) Object.assign(row, previousAccept);
+            state.deskOpen = id;
+            if (location.hash === '#/orders/verified') location.hash = '#/orders/new';
+          } else {
+            showAcceptedOrder(id);
+          }
           throw error;
         }
         // Local accept fallback: lock edited price + commission when company takes the order.
@@ -4133,6 +4287,26 @@ async function onViewClick(event) {
               ? order.parcelPhotoUrls.map((url) => String(url || '').trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 6)
               : [];
             if (photos.length && !cargoPhotoList(current).length) extras.parcelPhotoUrls = photos;
+            const senderPhone = String(order.senderPhone || order.customerPhone || order.phoneNumber || '').trim();
+            const senderName = String(order.senderName || order.customerName || '').trim();
+            const recipientName = String(order.recipientName || order.receiverName || '').trim();
+            const recipientPhone = String(order.recipientPhone || order.receiverPhone || '').trim();
+            if (senderPhone && !String(current.senderPhone || current.customerPhone || '').trim()) {
+              extras.senderPhone = senderPhone;
+              extras.customerPhone = senderPhone;
+            }
+            if (senderName && !String(current.senderName || current.customerName || '').trim()) {
+              extras.senderName = senderName;
+              extras.customerName = senderName;
+            }
+            if (recipientName && !String(current.recipientName || '').trim()) extras.recipientName = recipientName;
+            if (recipientPhone && !String(current.recipientPhone || '').trim()) extras.recipientPhone = recipientPhone;
+            const lat = Number(order.pickupLatitude ?? order.pickupLat);
+            const lng = Number(order.pickupLongitude ?? order.pickupLng);
+            if (!hasPickupCoords(current) && Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+              extras.pickupLatitude = lat;
+              extras.pickupLongitude = lng;
+            }
             const meters = Number(order.distanceMeters);
             if ((!current.distanceMeters || Number(current.distanceMeters) <= 0) && Number.isFinite(meters) && meters > 0) {
               extras.distanceMeters = Math.round(meters);
@@ -4149,6 +4323,7 @@ async function onViewClick(event) {
           trackStep: 'received',
           pickupStatus: 'assigned',
           acceptedAt: serverTimestamp(),
+          agentAcceptedAt: serverTimestamp(),
           manifestDate: darTodayKey(),
           cashExpected: fee,
           haulFee,
@@ -4173,10 +4348,13 @@ async function onViewClick(event) {
         }
         await updateDoc(doc(db, 'carriers', state.carrier.id), { accepted: increment(1) });
         await mirrorCustomerOrder(id, { ...current, ...acceptPatch });
-        const row = state.shipments.find((item) => item.id === id);
-        if (row) Object.assign(row, { carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received', quoteStatus: acceptPatch.quoteStatus || row.quoteStatus });
-        state.deskOpen = id;
-        if (location.hash.startsWith('#/orders') && location.hash !== '#/orders/verified') location.hash = '#/orders/verified';
+        const party = {};
+        ['senderName', 'senderPhone', 'customerName', 'customerPhone', 'recipientName', 'recipientPhone', 'pickupLatitude', 'pickupLongitude', 'parcelPhotoUrls'].forEach((key) => {
+          if (extras[key] != null && extras[key] !== '') party[key] = extras[key];
+        });
+        const row = rememberAcceptedOrder(id, { ...party, quoteStatus: acceptPatch.quoteStatus || current.quoteStatus });
+        if (row) void ensureAcceptedParty(row);
+        showAcceptedOrder(id);
         return;
       }
     }
