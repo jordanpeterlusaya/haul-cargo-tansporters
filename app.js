@@ -1319,7 +1319,7 @@ const NAV = [
   ['drivers', 'Drivers'],
   ['payments', 'Payments'],
   ['finance', 'Finance'],
-  ['levels', 'Levels'],
+  ['levels', 'Level'],
   ['profile', 'Company Profile'],
   ['settings', 'Settings'],
 ];
@@ -3148,48 +3148,96 @@ function driversPage() {
     </section>`;
 }
 
-const TIER_RULES = [
-  { id: 'bronze', label: 'Bronze', minStreak: 0, feePercent: 12, priority: 'Standard offer flow', payCeilingTzs: 30000, note: 'Starting level. Commission is 12% on completed cargo.' },
-  { id: 'silver', label: 'Silver', minStreak: 100, feePercent: 10, priority: 'Slight matching priority', payCeilingTzs: 60000, note: '100 finished jobs in a row. Commission drops to 10%.' },
-  { id: 'gold', label: 'Gold', minStreak: 250, feePercent: 8, priority: 'Higher matching priority', payCeilingTzs: 100000, note: '250 finished jobs in a row. Commission drops to 8%.' },
-  { id: 'platinum', label: 'Platinum', minStreak: 500, feePercent: 6, priority: 'Top matching priority', payCeilingTzs: 150000, note: '500 finished jobs in a row. Commission is 6%.' },
-];
+/** Portal membership is Bronze-only. Display rate matches quote/haulFee (15%). Do not invent tier ladders here. */
+const BRONZE_MEMBERSHIP = {
+  id: 'bronze',
+  label: 'Bronze',
+  feePercent: 15,
+  payCeilingTzs: 30000,
+};
+
+function bronzeMedalSvg() {
+  return `<div class="lvl-medal-stage" aria-hidden="true">
+    <svg class="lvl-medal" viewBox="0 0 200 220" role="img" aria-label="Bronze membership shield">
+      <defs>
+        <linearGradient id="lvlShieldOuter" x1="12%" y1="0%" x2="88%" y2="100%">
+          <stop offset="0%" stop-color="#ffe4c2"/>
+          <stop offset="28%" stop-color="#d39a5c"/>
+          <stop offset="62%" stop-color="#9a5828"/>
+          <stop offset="100%" stop-color="#4f2712"/>
+        </linearGradient>
+        <linearGradient id="lvlShieldInner" x1="20%" y1="8%" x2="80%" y2="95%">
+          <stop offset="0%" stop-color="#f6d7b0"/>
+          <stop offset="40%" stop-color="#c57d3f"/>
+          <stop offset="78%" stop-color="#7a421c"/>
+          <stop offset="100%" stop-color="#3d1d0c"/>
+        </linearGradient>
+        <linearGradient id="lvlShieldShine" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#fff8ec" stop-opacity="0.85"/>
+          <stop offset="42%" stop-color="#fff8ec" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="#2a1408" stop-opacity="0.35"/>
+        </linearGradient>
+        <linearGradient id="lvlRibbonA" x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stop-color="#2a2a28"/>
+          <stop offset="100%" stop-color="#111110"/>
+        </linearGradient>
+        <linearGradient id="lvlRibbonB" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#c8864a"/>
+          <stop offset="100%" stop-color="#6b3a18"/>
+        </linearGradient>
+        <filter id="lvlDepth" x="-25%" y="-20%" width="150%" height="150%">
+          <feDropShadow dx="0" dy="14" stdDeviation="10" flood-color="#5a3016" flood-opacity="0.34"/>
+        </filter>
+      </defs>
+      <path d="M72 18 L86 58 L58 58 Z" fill="url(#lvlRibbonA)"/>
+      <path d="M128 18 L142 58 L114 58 Z" fill="url(#lvlRibbonA)"/>
+      <path d="M78 22 L92 56 L70 56 Z" fill="url(#lvlRibbonB)" opacity="0.9"/>
+      <path d="M122 22 L130 56 L108 56 Z" fill="url(#lvlRibbonB)" opacity="0.9"/>
+      <path filter="url(#lvlDepth)" d="M100 48
+        C132 48 158 58 158 88
+        C158 132 138 168 100 198
+        C62 168 42 132 42 88
+        C42 58 68 48 100 48Z" fill="url(#lvlShieldOuter)"/>
+      <path d="M100 58
+        C126 58 146 66 146 90
+        C146 128 130 158 100 184
+        C70 158 54 128 54 90
+        C54 66 74 58 100 58Z" fill="url(#lvlShieldInner)"/>
+      <path d="M100 58
+        C126 58 146 66 146 90
+        C146 128 130 158 100 184
+        C70 158 54 128 54 90
+        C54 66 74 58 100 58Z" fill="url(#lvlShieldShine)"/>
+      <path d="M100 72
+        C118 72 132 78 132 94
+        C132 120 120 142 100 160
+        C80 142 68 120 68 94
+        C68 78 82 72 100 72Z" fill="none" stroke="rgba(255,240,214,0.55)" stroke-width="1.6"/>
+      <path d="M100 88l8.4 17 18.8 2.7-13.6 13.3 3.2 18.7L100 130.4l-16.8 8.8 3.2-18.7-13.6-13.3 18.8-2.7Z" fill="#fff4e4" opacity="0.95"/>
+      <text x="100" y="176" text-anchor="middle" fill="#fff4e4" font-size="13" font-weight="700" letter-spacing="2.4">BRONZE</text>
+    </svg>
+  </div>`;
+}
 
 function companyStanding() {
   const carrier = state.carrier || {};
   const owned = state.shipments.filter((item) => item.carrierId === carrier.id);
-  const completedTimes = owned
-    .filter((item) => item.shipmentStatus === 'delivered' || item.shipmentStatus === 'arrived')
-    .map((item) => item.deliveredAt?.toDate?.()?.getTime?.() || Date.parse(item.deliveredAt || 0) || 0)
-    .filter((ms) => ms > 0);
-  const breakTimes = owned
-    .flatMap((item) => (item.statusHistory || []).filter((entry) => ['matching', 'rejected'].includes(entry.status)).map((entry) => Date.parse(entry.at || 0) || 0))
-    .filter((ms) => ms > 0);
-  const latestBreak = breakTimes.reduce((max, ms) => Math.max(max, ms), 0);
-  const streak = latestBreak > 0 ? completedTimes.filter((ms) => ms > latestBreak).length : completedTimes.length;
-  const completed = completedTimes.length || Number(carrier.deliveries) || 0;
+  const completed = owned.filter((item) => isCommissionComplete(item)).length || Number(carrier.deliveries) || 0;
   const rejects = Number(carrier.rejected) || 0;
   const postAcceptCancels = Number(carrier.postAcceptCancels) || 0;
   const decisions = completed + rejects;
   const cancelRate = decisions > 0 ? rejects / decisions : 0;
-  let tier = TIER_RULES[0];
-  for (const rule of TIER_RULES) if (streak >= rule.minStreak) tier = rule;
-  const highCancel = cancelRate > 0.25 && decisions >= 8;
   const closure = Boolean(carrier.offersPaused || carrier.fraudHold) || postAcceptCancels >= 3 || (cancelRate >= 0.4 && decisions >= 8);
-  const punished = highCancel || closure;
-  const next = TIER_RULES[TIER_RULES.findIndex((rule) => rule.id === tier.id) + 1] || null;
   const unpaid = owned.reduce((sum, item) => sum + commissionParts(item).outstanding, 0);
-  const ceiling = punished ? TIER_RULES[0].payCeilingTzs : tier.payCeilingTzs;
+  const ceiling = BRONZE_MEMBERSHIP.payCeilingTzs;
   return {
-    streak,
     completed,
     rejects,
     postAcceptCancels,
     cancelPercent: Math.round(cancelRate * 100),
     closure,
-    feePercent: punished ? 15 : tier.feePercent,
-    tier,
-    next,
+    feePercent: BRONZE_MEMBERSHIP.feePercent,
+    tier: BRONZE_MEMBERSHIP,
     unpaid,
     ceiling,
     blocked: closure || unpaid >= ceiling,
@@ -3201,8 +3249,6 @@ function companyStanding() {
 
 function financePage() {
   const standing = companyStanding();
-  const next = standing.next ? `${standing.next.label} at streak ${standing.next.minStreak}` : 'Top tier';
-  const progress = standing.next ? Math.min(100, Math.round((standing.streak / standing.next.minStreak) * 100)) : 100;
   const owned = state.shipments.filter((item) => item.carrierId === state.carrier?.id);
   const delivered = owned.filter((item) => isCommissionComplete(item));
   const net = delivered.reduce((sum, item) => sum + (Number(item.carrierNet) || 0), 0);
@@ -3230,19 +3276,13 @@ function financePage() {
     ${metricCell('Completed orders', delivered.length)}
     ${metricCell('Pay ceiling', money(standing.ceiling))}
   </section>
-  <section class="panel tier-card tier-${esc(standing.tier.id)}">
-    <div class="level-row">
-      <span class="co-avatar lg" aria-hidden="true">${esc(standing.tier.label.slice(0, 1))}</span>
-      <div>
-        <p class="lp-kicker">Account level</p>
-        <h2>${esc(standing.tier.label)}</h2>
-        <p class="muted">Streak ${standing.streak}${standing.next ? ` · ${esc(next)}` : ''}</p>
-        <p>${standing.blocked ? 'Limit Reached — Orders Paused' : standing.unpaid >= standing.ceiling * 0.8 ? 'Approaching Commission Limit' : 'Eligible to Receive Orders'}</p>
-        <p class="muted">Threshold ${money(standing.ceiling)} · outstanding ${money(standing.unpaid)} · room ${money(Math.max(0, standing.ceiling - standing.unpaid))}</p>
-      </div>
+  <section class="panel lvl-finance-card">
+    <div class="lvl-finance-copy">
+      <p class="lp-kicker">Membership</p>
+      <h2>Bronze · ${standing.feePercent}% commission</h2>
+      <p class="muted">${standing.blocked ? esc(standing.reason) : 'Eligible to receive cargo orders. Commission uses the stored haulFee on each completed order.'}</p>
     </div>
-    <div class="tier-bar"><span style="width:${progress}%"></span></div>
-    <button class="btn line small" data-go="levels" type="button">Level benefits</button>
+    <button class="btn line small" data-go="levels" type="button">View Level</button>
   </section>
   ${monthRows.length ? `<section class="panel"><h2>Commission by month</h2><div class="month-bars">${monthRows.map(([label, value]) => `<div><span>${esc(label)}</span><i style="width:${Math.round((value / monthMax) * 100)}%"></i><b>${money(value)}</b></div>`).join('')}</div></section>` : ''}
   <section class="panel debt-finance-cta">
@@ -3275,19 +3315,75 @@ function financePage() {
 
 function levelsPage() {
   const standing = companyStanding();
-  return `<section class="panel">
-    <p class="lp-kicker">Levels</p>
-    <h2>How commission and benefits work</h2>
-    <p class="muted">A reject or cancel resets the streak. If cancels stay high, commission returns to 15% and new offers can pause.</p>
-  </section>
-  <div class="level-grid">${TIER_RULES.map((rule) => `<article class="panel tier-card tier-${esc(rule.id)} ${rule.id === standing.tier.id ? 'is-current' : ''}">
-    <span class="co-avatar" aria-hidden="true">${esc(rule.label.slice(0, 1))}</span>
-    <h3>${esc(rule.label)}</h3>
-    <p class="level-fee">${rule.feePercent}%</p>
-    <p>${esc(rule.note)}</p>
-    <p class="muted">${esc(rule.priority)} · unpaid ceiling ${money(rule.payCeilingTzs)}</p>
-    ${rule.id === standing.tier.id ? '<p class="level-now">Your level</p>' : ''}
-  </article>`).join('')}</div>`;
+  const icon = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  const benefits = [
+    { title: 'Cargo orders on Haul', copy: 'Receive matched freight offers for your coverage regions.', icon: icon('<path d="M3 7h13l5 5v5H3V7Z"/><path d="M16 7v5h5"/><circle cx="7.5" cy="17.5" r="1.5"/><circle cx="17.5" cy="17.5" r="1.5"/>') },
+    { title: 'More customer opportunities', copy: 'Stay visible to shippers looking for reliable transporters.', icon: icon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>') },
+    { title: 'Professional profile', copy: 'Present your company with verified business details.', icon: icon('<path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M19 8v4"/><path d="M17 10h4"/>') },
+    { title: 'Dashboard + order tools', copy: 'Accept, organize, and run jobs from one operations desk.', icon: icon('<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>') },
+    { title: 'Track / update delivery', copy: 'Move each shipment through pickup, transit, and arrival.', icon: icon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>') },
+    { title: 'Transparent commission / payments', copy: 'See haulFee, payments, and outstanding balance clearly.', icon: icon('<path d="M12 3v18"/><path d="M17 8c0-2.2-2.2-4-5-4s-5 1.8-5 4 2.2 4 5 4 5 1.8 5 4-2.2 4-5 4-5-1.8-5-4"/>') },
+    { title: 'Customer info for assigned orders', copy: 'Access contacts and drop-off details once an order is yours.', icon: icon('<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>') },
+    { title: 'Haul support', copy: 'Get help from Haul when operations need a human assist.', icon: icon('<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5"/><path d="M12 17h.01"/>') },
+  ];
+  return `<section class="lvl-page">
+    <header class="lvl-hero panel">
+      <div class="lvl-hero-copy">
+        <p class="lvl-eyebrow">HAUL · Transporter Level</p>
+        <div class="lvl-badge-row" aria-label="Bronze membership">
+          <span class="lvl-pill">Bronze</span>
+          <span class="lvl-pill lvl-pill--soft">${standing.blocked ? 'Paused' : 'Active member'}</span>
+        </div>
+        <h1>Bronze</h1>
+        <p class="lvl-lede">Your membership on Haul. One clear transporter level — professional cargo access with transparent commission.</p>
+      </div>
+      <div class="lvl-hero-visual">
+        ${bronzeMedalSvg()}
+      </div>
+    </header>
+
+    <section class="lvl-rate panel" aria-label="Commission rate">
+      <div class="lvl-rate-copy">
+        <p class="lvl-eyebrow">Commission</p>
+        <h2>15% per completed order</h2>
+        <p class="muted">Displayed rate matches the stored haulFee on each finished job. Balances update only after verified payment.</p>
+      </div>
+      <div class="lvl-rate-figure" aria-label="15 percent commission">
+        <strong>${standing.feePercent}<span>%</span></strong>
+        <em>Haul commission</em>
+      </div>
+    </section>
+
+    <section class="lvl-benefits panel">
+      <div class="section-head">
+        <h2>Bronze benefits</h2>
+        <p class="muted">Everything included with your transporter membership.</p>
+      </div>
+      <ul class="lvl-benefit-grid">
+        ${benefits.map((item) => `<li class="lvl-benefit">
+          <span class="lvl-benefit-icon" aria-hidden="true">${item.icon}</span>
+          <div>
+            <strong>${esc(item.title)}</strong>
+            <p>${esc(item.copy)}</p>
+          </div>
+        </li>`).join('')}
+      </ul>
+    </section>
+
+    <section class="lvl-status panel">
+      <div>
+        <p class="lvl-eyebrow">Account status</p>
+        <h2>${standing.blocked ? 'Orders paused' : 'Eligible for offers'}</h2>
+        <p class="muted">${standing.blocked
+          ? esc(standing.reason)
+          : `Outstanding ${esc(moneyTsh(standing.unpaid))} · ceiling ${esc(moneyTsh(standing.ceiling))}. Keep commission current to stay open for new cargo.`}</p>
+      </div>
+      <div class="lvl-status-actions">
+        <button class="btn drv-cta" data-go="payments" type="button">Open Payments</button>
+        <button class="btn line" data-go="finance" type="button">View Finance</button>
+      </div>
+    </section>
+  </section>`;
 }
 
 function orderRow(item) {
@@ -4916,7 +5012,7 @@ async function render() {
     history: 'History',
     drivers: 'Drivers',
     finance: 'Finance',
-    levels: 'Levels',
+    levels: 'Level',
     notifications: 'Notifications',
     profile: 'Company Profile',
     trips: 'Drivers & Vehicles',
@@ -4938,7 +5034,7 @@ async function render() {
   };
   $('pageTitle').textContent = titles[page] || 'Dashboard';
   const viewEl = $('view');
-  viewEl.classList.toggle('wide', ['fares', 'payments', 'fedha', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment', 'drivers', 'trips', 'vehicles'].includes(page));
+  viewEl.classList.toggle('wide', ['fares', 'payments', 'fedha', 'available', 'orders', 'overview', 'finance', 'history', 'transit', 'assignment', 'drivers', 'trips', 'vehicles', 'levels'].includes(page));
   const rows = state.shipments.filter(mine);
   let html = '';
   if (!state.carrier && !state.isAdmin && page !== 'desk' && page !== 'uthibitisho') {
