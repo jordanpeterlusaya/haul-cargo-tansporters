@@ -2542,65 +2542,222 @@ body:has(#app:not(.hidden)) {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 #app .so-chart-card {
-  padding: 22px 22px 14px;
+  padding: 20px 22px 18px;
+  background: #fff;
 }
 #app .so-chart-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 #app .so-chart-head h3 {
   margin: 0;
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: #374151;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-transform: none;
+  color: var(--so-ink);
 }
 #app .so-chart-head span {
   font-size: 12px;
   font-weight: 600;
   color: var(--so-muted);
+  font-variant-numeric: tabular-nums;
 }
 #app .so-empty {
   padding: 48px 12px;
   text-align: center;
 }
 #app .orders-chart {
-  margin-top: 2px;
+  --plot-h: 292px;
   width: 100%;
+}
+#app .orders-chart-body {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 10px;
+  margin-top: 22px;
+}
+#app .orders-chart-ycol,
+#app .orders-chart-plot {
+  position: relative;
+  height: var(--plot-h);
+}
+#app .orders-chart-ytitle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  transform: translateY(calc(-100% - 8px));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  line-height: 1;
+}
+#app .orders-chart-ytick {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
 }
 #app .orders-chart-svg {
-  display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
-  max-height: 300px;
+  height: 100%;
+  display: block;
+  overflow: visible;
 }
 #app .orders-chart-grid {
-  stroke: #e8ebf0;
-  stroke-width: 1;
-  stroke-dasharray: none;
+  stroke: #e8edf2;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
 }
-#app .orders-chart-tick,
-#app .orders-chart-xlabel {
-  fill: #9aa3b2;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: inherit;
+#app .orders-chart-baseline {
+  stroke: #d5dbe3;
 }
+#app .orders-chart-area { stroke: none; }
 #app .orders-chart-line {
-  stroke: #9aa3b2;
-  stroke-width: 2;
+  fill: none;
+  stroke: #14532d;
+  stroke-width: 2.25px;
   stroke-linecap: round;
   stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+#app .orders-chart-end {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #f5e000;
+  border: 2px solid #14532d;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 1;
+}
+#app .orders-chart-hit {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translateX(-50%);
+  cursor: crosshair;
+}
+#app .orders-chart-hit:hover,
+#app .orders-chart-hit:focus-visible {
+  background: linear-gradient(90deg, transparent, rgba(20, 83, 45, 0.05), transparent);
+  outline: none;
+  z-index: 3;
+}
+#app .orders-chart-hit:hover::after,
+#app .orders-chart-hit:focus-visible::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(20, 83, 45, 0.35);
+  transform: translateX(-50%);
 }
 #app .orders-chart-dot {
-  fill: var(--so-lime);
-  stroke: #fff;
-  stroke-width: 2.5;
+  position: absolute;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #14532d;
+  box-shadow: 0 0 0 2px #f5e000;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
 }
+#app .orders-chart-hit:hover .orders-chart-dot,
+#app .orders-chart-hit:focus-visible .orders-chart-dot { opacity: 1; }
+#app .orders-chart-plot:has(.orders-chart-hit:hover) .orders-chart-end,
+#app .orders-chart-plot:has(.orders-chart-hit:focus-visible) .orders-chart-end { opacity: 0; }
+#app .orders-chart-tip {
+  position: absolute;
+  left: 50%;
+  z-index: 4;
+  min-width: 92px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid #e6e8ec;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(17, 17, 19, 0.08), 0 1px 2px rgba(17, 17, 19, 0.04);
+  transform: translate(-50%, calc(-100% - 14px));
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+#app .orders-chart-tip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 3px;
+  background: #14532d;
+}
+#app .orders-chart-hit:hover .orders-chart-tip,
+#app .orders-chart-hit:focus-visible .orders-chart-tip { opacity: 1; }
+#app .orders-chart-hit.tip-start .orders-chart-tip {
+  left: 50%;
+  transform: translate(0, calc(-100% - 14px));
+}
+#app .orders-chart-hit.tip-end .orders-chart-tip {
+  left: 50%;
+  transform: translate(-100%, calc(-100% - 14px));
+}
+#app .orders-chart-tip b {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #1a1d24;
+}
+#app .orders-chart-tip em {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 650;
+  color: #4b5563;
+  font-variant-numeric: tabular-nums;
+}
+#app .orders-chart-xlabels {
+  position: relative;
+  grid-column: 2;
+  height: 16px;
+}
+#app .orders-chart-xlabel {
+  position: absolute;
+  top: 0;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  color: #6b7280;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+#app .orders-chart-xlabel.is-start { transform: translateX(0); }
+#app .orders-chart-xlabel.is-mid { transform: translateX(-50%); }
+#app .orders-chart-xlabel.is-end { transform: translateX(-100%); }
 #app .so-kpis {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2711,9 +2868,11 @@ body:has(#app:not(.hidden)) {
     gap: 14px;
   }
   #app .so-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #app .so-kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }
   #app .so-gauges { grid-template-columns: 1fr 1fr; }
-  #app .so-chart-card { padding: 16px 14px 10px; }
-  #app .orders-chart-svg { max-height: 220px; }
+  #app .so-chart-card { padding: 16px 14px 14px; }
+  #app .orders-chart { --plot-h: 220px; }
+  #app .orders-chart-xlabel.is-minor { display: none; }
   #app .so-kpi strong { font-size: 20px; }
   #app .so-gauge-value { font-size: 20px; }
 }

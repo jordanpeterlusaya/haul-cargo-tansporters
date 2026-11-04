@@ -1775,58 +1775,146 @@ function ordersTrend() {
   };
 }
 
+function niceYScale(maxCount) {
+  const peak = Math.max(0, Number(maxCount) || 0);
+  if (peak <= 4) {
+    const max = Math.max(1, Math.ceil(peak));
+    const ticks = [];
+    for (let value = 0; value <= max; value += 1) ticks.push(value);
+    return { max, ticks };
+  }
+  const rough = peak / 4;
+  const mag = 10 ** Math.floor(Math.log10(Math.max(rough, 1)));
+  const residual = rough / mag;
+  const step = Math.max(1, residual <= 1 ? mag : residual <= 2 ? 2 * mag : residual <= 5 ? 5 * mag : 10 * mag);
+  const max = Math.ceil((peak - 1e-9) / step) * step;
+  const ticks = [];
+  for (let value = 0; value <= max + step * 0.001; value += step) ticks.push(Math.round(value));
+  return { max: ticks[ticks.length - 1], ticks };
+}
+
+function smoothSeriesPath(points) {
+  const fmt = (n) => Number(n).toFixed(2);
+  if (!points.length) return '';
+  if (points.length === 1) return `M${fmt(points[0].x)} ${fmt(points[0].y)}`;
+  const n = points.length;
+  const dx = [];
+  const slope = [];
+  for (let i = 0; i < n - 1; i += 1) {
+    const span = points[i + 1].x - points[i].x || 1;
+    dx[i] = span;
+    slope[i] = (points[i + 1].y - points[i].y) / span;
+  }
+  const tangent = new Array(n);
+  tangent[0] = slope[0];
+  tangent[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i += 1) {
+    tangent[i] = slope[i - 1] * slope[i] <= 0 ? 0 : (slope[i - 1] + slope[i]) / 2;
+  }
+  for (let i = 0; i < n - 1; i += 1) {
+    if (Math.abs(slope[i]) < 1e-6) {
+      tangent[i] = 0;
+      tangent[i + 1] = 0;
+    } else {
+      const a = tangent[i] / slope[i];
+      const b = tangent[i + 1] / slope[i];
+      const hypot = a * a + b * b;
+      if (hypot > 9) {
+        const scale = 3 / Math.sqrt(hypot);
+        tangent[i] = scale * a * slope[i];
+        tangent[i + 1] = scale * b * slope[i];
+      }
+    }
+  }
+  let path = `M${fmt(points[0].x)} ${fmt(points[0].y)}`;
+  for (let i = 0; i < n - 1; i += 1) {
+    const p0 = points[i];
+    const p1 = points[i + 1];
+    const c1x = p0.x + dx[i] / 3;
+    const c1y = p0.y + (tangent[i] * dx[i]) / 3;
+    const c2x = p1.x - dx[i] / 3;
+    const c2y = p1.y - (tangent[i + 1] * dx[i]) / 3;
+    path += ` C${fmt(c1x)} ${fmt(c1y)} ${fmt(c2x)} ${fmt(c2y)} ${fmt(p1.x)} ${fmt(p1.y)}`;
+  }
+  return path;
+}
+
 function ordersOverTimeChart(days) {
-  const W = 720;
-  const H = 260;
-  const pad = { l: 40, r: 18, t: 22, b: 36 };
-  const plotW = W - pad.l - pad.r;
-  const plotH = H - pad.t - pad.b;
-  const maxCount = Math.max(1, ...days.map((day) => day.count));
-  const yTicks = maxCount <= 2
-    ? [0, maxCount]
-    : [0, Math.ceil(maxCount / 2), maxCount];
+  const scale = niceYScale(Math.max(0, ...days.map((day) => day.count)));
   const n = days.length;
-  const points = days.map((day, i) => {
-    const x = pad.l + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
-    const y = pad.t + plotH - (day.count / maxCount) * plotH;
-    return { x, y, day };
-  });
-  const linePath = points
-    .map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
-    .join(' ');
-  const last = points[points.length - 1];
+  const yPad = 8;
+  const yPos = (count) => yPad + (1 - (count / scale.max)) * (100 - yPad * 2);
+  const xPos = (index) => (n <= 1 ? 50 : (index / (n - 1)) * 100);
+  const points = days.map((day, index) => ({
+    x: xPos(index),
+    y: yPos(day.count),
+    day,
+  }));
+  const linePath = smoothSeriesPath(points);
+  const baseline = yPos(0);
   const first = points[0];
-  const areaPath = `${linePath} L${last.x.toFixed(1)} ${(pad.t + plotH).toFixed(1)} L${first.x.toFixed(1)} ${(pad.t + plotH).toFixed(1)} Z`;
-  const grid = yTicks.map((tick) => {
-    const y = pad.t + plotH - (tick / maxCount) * plotH;
-    return `<line class="orders-chart-grid" x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" />
-      <text class="orders-chart-tick" x="${pad.l - 10}" y="${(y + 4).toFixed(1)}" text-anchor="end">${tick}</text>`;
+  const last = points[points.length - 1];
+  const areaPath = `${linePath} L${last.x.toFixed(2)} ${baseline.toFixed(2)} L${first.x.toFixed(2)} ${baseline.toFixed(2)} Z`;
+  const grid = scale.ticks.map((tick) => {
+    const y = yPos(tick);
+    const baselineClass = tick === 0 ? ' orders-chart-baseline' : '';
+    return `<line class="orders-chart-grid${baselineClass}" x1="0" y1="${y.toFixed(2)}" x2="100" y2="${y.toFixed(2)}" />`;
   }).join('');
-  const step = n > 20 ? 4 : n > 10 ? 2 : 1;
-  const xLabels = points.map((p, i) => {
-    if (i !== 0 && i !== n - 1 && i % step !== 0) return '';
-    const parts = p.day.label.split(' ');
-    const text = n > 16 ? parts[0] : p.day.label;
-    return `<text class="orders-chart-xlabel" x="${p.x.toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(text)}</text>`;
-  }).join('');
-  const dots = points.map((p) => (
-    `<circle class="orders-chart-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5">
-      <title>${esc(p.day.label)} · ${p.day.count} oda</title>
-    </circle>`
+  const yTicks = scale.ticks.map((tick) => (
+    `<span class="orders-chart-ytick" style="top:${yPos(tick).toFixed(2)}%">${esc(Math.round(tick).toLocaleString('en-US'))}</span>`
   )).join('');
-  return `<svg class="orders-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Oda kwa muda">
-    <defs>
-      <linearGradient id="ordersAreaFill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#7CB342" stop-opacity="0.18"/>
-        <stop offset="100%" stop-color="#7CB342" stop-opacity="0.01"/>
-      </linearGradient>
-    </defs>
-    ${grid}
-    <path class="orders-chart-area" d="${areaPath}" fill="url(#ordersAreaFill)"/>
-    <path class="orders-chart-line" d="${linePath}" fill="none"/>
-    ${dots}
-    ${xLabels}
-  </svg>`;
+  const pickLabels = (indexes, gap) => {
+    if (indexes.length <= 1) return indexes.slice();
+    const last = indexes[indexes.length - 1];
+    const chosen = [indexes[0]];
+    indexes.slice(1, -1).forEach((index) => {
+      const prev = chosen[chosen.length - 1];
+      if (points[index].x - points[prev].x >= gap && points[last].x - points[index].x >= gap) chosen.push(index);
+    });
+    chosen.push(last);
+    return chosen;
+  };
+  const wideLabels = pickLabels(points.map((_, index) => index), 16);
+  const narrowLabels = new Set(pickLabels(wideLabels, 28));
+  const xLabels = wideLabels.map((index) => {
+    const point = points[index];
+    const align = index === 0 ? 'start' : index === n - 1 ? 'end' : 'mid';
+    const density = narrowLabels.has(index) ? '' : ' is-minor';
+    return `<span class="orders-chart-xlabel is-${align}${density}" style="left:${point.x.toFixed(2)}%">${esc(point.day.label)}</span>`;
+  }).join('');
+  const column = n <= 1 ? 28 : 100 / (n - 1);
+  const hits = points.map((point) => {
+    const edge = point.x < 12 ? ' tip-start' : point.x > 88 ? ' tip-end' : '';
+    return `<button type="button" class="orders-chart-hit${edge}" style="left:${point.x.toFixed(2)}%;width:${column.toFixed(2)}%" aria-label="${esc(point.day.label)}, ${point.day.count} oda">
+      <i class="orders-chart-dot" style="top:${point.y.toFixed(2)}%"></i>
+      <span class="orders-chart-tip" style="top:${point.y.toFixed(2)}%"><b>${esc(point.day.label)}</b><em>${esc(String(point.day.count))} oda</em></span>
+    </button>`;
+  }).join('');
+  return `<div class="orders-chart">
+    <div class="orders-chart-body">
+      <div class="orders-chart-ycol">
+        <span class="orders-chart-ytitle">Oda</span>
+        ${yTicks}
+      </div>
+      <div class="orders-chart-plot">
+        <svg class="orders-chart-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="ordersAreaFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#14532d" stop-opacity="0.16"/>
+              <stop offset="72%" stop-color="#14532d" stop-opacity="0.04"/>
+              <stop offset="100%" stop-color="#14532d" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          ${grid}
+          <path class="orders-chart-area" d="${areaPath}" fill="url(#ordersAreaFill)"/>
+          <path class="orders-chart-line" d="${linePath}"/>
+        </svg>
+        <i class="orders-chart-end" style="left:${last.x.toFixed(2)}%;top:${last.y.toFixed(2)}%"></i>
+        ${hits}
+      </div>
+      <div class="orders-chart-xlabels">${xLabels}</div>
+    </div>
+  </div>`;
 }
 
 function metricCell(label, value, tone) {
@@ -1882,22 +1970,22 @@ function dashboard() {
       </div>
     </header>
 
-    <section class="so-card so-chart-card" aria-label="Oda kwa muda">
-      <div class="so-chart-head">
-        <h3>ODA × MUDA</h3>
-        <span>${esc(trend.rangeLabel)} · ${windowTotal} oda</span>
-      </div>
-      ${trend.dated
-        ? `<div class="orders-chart">${ordersOverTimeChart(trend.days)}</div>`
-        : '<p class="empty so-empty">Hakuna oda za kuchora bado. Oda zitaonekana hapa zinapofika.</p>'}
-    </section>
-
     <section class="so-kpis" aria-label="Vipimo muhimu">
       ${kpiCard('Mapato', money(kpis.mapato))}
       ${kpiCard('Mapato ya leo', money(kpis.mapatoLeo), kpis.mapatoLeo ? 'hot' : '')}
       ${kpiCard('Commission', money(kpis.commission))}
       ${kpiCard('Oda za leo', String(kpis.odaLeo), kpis.odaLeo ? 'live' : '')}
       ${kpiCard('Zilizokamilika', String(kpis.completed))}
+    </section>
+
+    <section class="so-card so-chart-card" aria-label="Oda kwa muda">
+      <div class="so-chart-head">
+        <h3>Oda × muda</h3>
+        <span>${esc(trend.rangeLabel)} · ${windowTotal} oda</span>
+      </div>
+      ${trend.dated
+        ? ordersOverTimeChart(trend.days)
+        : '<p class="empty so-empty">Hakuna oda za kuchora bado. Oda zitaonekana hapa zinapofika.</p>'}
     </section>
 
     <section class="so-gauges" aria-label="Vipimo vya sehemu">
