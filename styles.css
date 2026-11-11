@@ -236,8 +236,23 @@ img { max-width: 100%; display: block; }
 }
 .auth-lead { margin-top: 8px; color: var(--muted); font-size: 14px; }
 .auth-panel form { margin-top: 28px; }
-.auth-panel .btn.primary { width: 100%; margin-top: 12px; }
+.auth-panel .btn.primary {
+  width: 100%;
+  margin-top: 12px;
+  min-height: 48px;
+  font-size: 15px;
+  font-weight: 700;
+  position: relative;
+  z-index: 2;
+}
 .auth-panel .btn.ghost { width: 100%; margin-top: 10px; font-size: 13px; }
+.auth-panel .btn.link {
+  display: inline-flex;
+  margin: 8px 0 0;
+  padding: 6px 0;
+  min-height: 36px;
+  font-weight: 600;
+}
 .step-label { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 
 label {
@@ -284,8 +299,23 @@ textarea { min-height: 80px; resize: vertical; }
   padding: 4px 8px;
 }
 .password-toggle:hover { color: var(--ink); }
-.form-error { color: #9f1239; min-height: 20px; margin-top: 12px; font-size: 13px; font-weight: 600; }
-.form-success { color: var(--haul); min-height: 20px; margin-top: 12px; font-size: 13px; font-weight: 600; }
+.form-error {
+  color: #9f1239;
+  min-height: 20px;
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: normal;
+}
+.form-success {
+  color: var(--haul);
+  min-height: 20px;
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+}
 .reg-nav { display: flex; gap: 8px; margin-top: 20px; }
 .reg-nav .btn { flex: 1; }
 

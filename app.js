@@ -941,16 +941,11 @@ function isVerifiedCarrier(carrier) {
 }
 
 function authModeFromHash() {
-  if (state.user) return '';
+  if (state.user && !state.needsCompanySetup) return '';
   const page = route().page;
-  if (page !== 'login' && page !== 'register') return '';
-  try {
-    if (sessionStorage.getItem(AUTH_INTENT_KEY) === page) return page;
-  } catch {
-    /* ignore */
-  }
-  if (location.hash === '#/login' || location.hash === '#/register') {
-    location.replace('#/');
+  if (page === 'login' || page === 'register') {
+    rememberAuthIntent(page);
+    return page;
   }
   return '';
 }
@@ -1019,55 +1014,61 @@ function logAuthErrorCode(error) {
   console.error('[auth]', code);
 }
 
+function bilingual(en, sw) {
+  return `${en} / ${sw}`;
+}
+
 function loginAuthErrorMessage(error) {
   const code = String(error?.code || '');
   switch (code) {
     case 'auth/wrong-password':
     case 'auth/invalid-credential':
     case 'auth/invalid-login-credentials':
-      return 'Incorrect email or password.';
+      return bilingual('Incorrect email or password.', 'Barua pepe au nenosiri si sahihi.');
     case 'auth/user-not-found':
-      return 'No account found for this email.';
+      return bilingual('No account found for this email.', 'Hakuna akaunti kwa barua pepe hii.');
     case 'auth/invalid-email':
-      return 'Enter a valid business email.';
+      return bilingual('Enter a valid business email.', 'Weka barua pepe sahihi ya biashara.');
     case 'auth/too-many-requests':
-      return 'Too many attempts. Please wait and try again.';
+      return bilingual('Too many attempts. Please wait and try again.', 'Jaribio nyingi. Subiri kidogo kisha jaribu tena.');
     case 'auth/network-request-failed':
-      return 'Network error. Check your connection and try again.';
+      return bilingual('Network error. Check your connection and try again.', 'Tatizo la mtandao. Angalia muunganisho wako.');
     case 'auth/user-disabled':
-      return 'This account is disabled. Contact Haul support.';
+      return bilingual('This account is disabled. Contact Haul support.', 'Akaunti imezuiwa. Wasiliana na msaada wa Haul.');
+    case 'auth/missing-email':
+      return bilingual('Enter your business email first.', 'Weka barua pepe ya biashara kwanza.');
     default:
       break;
   }
-  return 'Login failed. Please try again.';
+  return bilingual('Login failed. Please try again.', 'Kuingia kumeshindikana. Jaribu tena.');
 }
 
 function authErrorMessage(error) {
   const code = String(error?.code || '');
   if (LOGIN_CREDENTIAL_CODES.has(code)) {
-    return 'Incorrect email or password.';
+    return bilingual('Incorrect email or password.', 'Barua pepe au nenosiri si sahihi.');
   }
   switch (code) {
     case 'auth/user-not-found':
-      return 'No account found for this email.';
+      return bilingual('No account found for this email.', 'Hakuna akaunti kwa barua pepe hii.');
     case 'auth/email-already-in-use':
-      return 'This business email is already registered. Please log in.';
+      return bilingual('This business email is already registered. Please log in.', 'Barua pepe hii tayari imesajiliwa. Tafadhali ingia.');
     case 'auth/weak-password':
-      return 'Password must be at least 6 characters.';
+      return bilingual('Password must be at least 6 characters.', 'Nenosiri liwe angalau herufi 6.');
     case 'auth/invalid-email':
-      return 'Enter a valid business email.';
+      return bilingual('Enter a valid business email.', 'Weka barua pepe sahihi ya biashara.');
     case 'auth/too-many-requests':
-      return 'Too many attempts. Please wait and try again.';
+      return bilingual('Too many attempts. Please wait and try again.', 'Jaribio nyingi. Subiri kidogo kisha jaribu tena.');
     case 'auth/network-request-failed':
-      return 'Network error. Check your connection and try again.';
+      return bilingual('Network error. Check your connection and try again.', 'Tatizo la mtandao. Angalia muunganisho wako.');
     case 'auth/user-disabled':
-      return 'This account is disabled. Contact Haul support.';
+      return bilingual('This account is disabled. Contact Haul support.', 'Akaunti imezuiwa. Wasiliana na msaada wa Haul.');
     case 'permission-denied':
-      return 'Permission denied. Try again later.';
+      return bilingual('Permission denied. Try again later.', 'Ruhusa imekataliwa. Jaribu baadaye.');
     case 'unavailable':
-      return 'Service temporarily unavailable. Try again.';
+      return bilingual('Service temporarily unavailable. Try again.', 'Huduma haipatikani kwa sasa. Jaribu tena.');
     case 'failed-precondition':
-      return 'Service is not ready. Try again.';
+      return bilingual('Service is not ready. Try again.', 'Huduma haijawa tayari. Jaribu tena.');
     default:
       break;
   }
@@ -1075,7 +1076,7 @@ function authErrorMessage(error) {
   if (msg && !/firebase/i.test(msg) && !/^auth\//.test(msg) && !code.startsWith('auth/')) {
     return msg;
   }
-  return 'Something went wrong. Please try again.';
+  return bilingual('Something went wrong. Please try again.', 'Kuna tatizo. Jaribu tena.');
 }
 
 function readLoginCredentials() {
@@ -1086,10 +1087,9 @@ function readLoginCredentials() {
 }
 
 function readRegisterCredentials() {
-  const step3 = document.querySelector('#registerFields [data-reg-step="3"]');
   return {
-    email: String(step3?.querySelector('input[name="email"]')?.value || '').trim().toLowerCase(),
-    password: String(step3?.querySelector('input[name="password"]')?.value || ''),
+    email: String($('regEmail')?.value || '').trim().toLowerCase(),
+    password: String($('regPassword')?.value || ''),
   };
 }
 
@@ -1118,66 +1118,105 @@ function validateRegisterStep(step) {
   const data = new FormData($('authForm'));
   if (step === 1) {
     if (!String(data.get('companyName') || '').trim()) {
-      $('authError').textContent = 'Enter the company name.';
+      $('authError').textContent = bilingual('Enter the company name.', 'Weka jina la kampuni.');
       return false;
     }
     const phone = String(data.get('phone') || '').trim();
-    if (!phone || phone.replace(/\D/g, '').length < 9) {
-      $('authError').textContent = 'Enter an active company phone for order notifications.';
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (!phone || phoneDigits.length < 9 || phoneDigits.length > 15) {
+      $('authError').textContent = bilingual(
+        'Enter an active company phone for order notifications (e.g. 07XXXXXXXX).',
+        'Weka simu hai ya kampuni kwa arifa za oda (mf. 07XXXXXXXX).',
+      );
       return false;
     }
   }
   if (step === 2) {
     if (!String(data.get('region') || '').trim()) {
-      $('authError').textContent = 'Select the company base region.';
+      $('authError').textContent = bilingual('Select the company base region.', 'Chagua mkoa wa makao makuu.');
       return false;
     }
     const allTz = Boolean(data.get('coverageAllTanzania'));
     const regions = selectedCoverageRegions();
     if (!allTz && !regions.length) {
-      $('authError').textContent = 'Select All Tanzania or at least one operating region.';
+      $('authError').textContent = bilingual(
+        'Select All Tanzania or at least one operating region.',
+        'Chagua Mikoa yote au angalau mkoa mmoja.',
+      );
       return false;
     }
   }
   if (step === 3) {
-    const email = String(data.get('email') || '').trim();
-    const password = String(data.get('password') || '');
-    const confirm = String(data.get('passwordConfirm') || '');
+    const { email, password } = readRegisterCredentials();
+    const confirm = String($('regPasswordConfirm')?.value || data.get('passwordConfirm') || '');
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      $('authError').textContent = 'Enter a valid business email.';
+      $('authError').textContent = bilingual('Enter a valid business email.', 'Weka barua pepe sahihi ya biashara.');
       return false;
     }
     if (password.length < 6) {
-      $('authError').textContent = 'Password must be at least 6 characters.';
+      $('authError').textContent = bilingual('Password must be at least 6 characters.', 'Nenosiri liwe angalau herufi 6.');
       return false;
     }
     if (password !== confirm) {
-      $('authError').textContent = 'Password and confirmation do not match.';
+      $('authError').textContent = bilingual('Password and confirmation do not match.', 'Nenosiri na uthibitisho havilingani.');
       return false;
     }
     if (!data.get('termsAccepted')) {
-      $('authError').textContent = 'Accept the terms and conditions to continue.';
+      $('authError').textContent = bilingual(
+        'Accept the terms and conditions to continue.',
+        'Kubali masharti na hali ili kuendelea.',
+      );
       return false;
     }
   }
   return true;
 }
 
+function validateLoginForm() {
+  const { email, password } = readLoginCredentials();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    $('authError').textContent = bilingual('Enter a valid business email.', 'Weka barua pepe sahihi ya biashara.');
+    return false;
+  }
+  if (!password) {
+    $('authError').textContent = bilingual('Enter your password.', 'Weka nenosiri lako.');
+    return false;
+  }
+  if (password.length < 6) {
+    $('authError').textContent = bilingual('Password must be at least 6 characters.', 'Nenosiri liwe angalau herufi 6.');
+    return false;
+  }
+  return true;
+}
+
 function setRegisterStep(step) {
-  registerStep = step;
+  registerStep = Math.max(1, Number(step) || 1);
   document.querySelectorAll('[data-reg-step]').forEach((el) => {
-    el.classList.toggle('hidden', Number(el.dataset.regStep) !== step);
+    const active = Number(el.dataset.regStep) === registerStep;
+    el.classList.toggle('hidden', !active);
+    // Keep all register fields enabled so FormData still includes earlier steps.
+    // novalidate + custom validateRegisterStep prevent hidden-field submit blocks.
+    el.querySelectorAll('input, select, textarea').forEach((input) => {
+      input.required = false;
+      if (state.mode === 'register') input.disabled = false;
+    });
   });
   const loginBlock = $('loginFields');
   const regBlock = $('registerFields');
   if (state.mode === 'register') {
     loginBlock.classList.add('hidden');
-    loginBlock.querySelectorAll('input').forEach((input) => { input.required = false; });
+    loginBlock.querySelectorAll('input, select, textarea').forEach((input) => {
+      input.disabled = true;
+      input.required = false;
+    });
     regBlock.classList.remove('hidden');
-    const step3 = regBlock.querySelector('[data-reg-step="3"]');
-    step3.querySelectorAll('input').forEach((input) => { input.required = step === 3; });
-    $('authSubmit').textContent = step === 3 ? 'Create account' : 'Continue';
+    const maxStep = registerMaxStep();
+    const onFinal = registerStep >= maxStep;
+    $('authSubmit').textContent = state.needsCompanySetup && onFinal
+      ? 'Create company'
+      : (onFinal ? 'Create account' : 'Continue');
     $('authSubmit').type = 'submit';
+    $('authSubmit').disabled = false;
   }
 }
 
@@ -1261,24 +1300,40 @@ function showPublic(authMode) {
   const loginBlock = $('loginFields');
   $('registerFields').classList.toggle('hidden', !register);
   loginBlock.classList.toggle('hidden', register);
-  loginBlock.querySelectorAll('input').forEach((input) => {
-    input.required = !register;
+  loginBlock.querySelectorAll('input, select, textarea').forEach((input) => {
+    input.required = false;
+    input.disabled = register;
   });
   document.querySelector('#registerFields [data-reg-step="3"]')?.classList.toggle('hidden', state.needsCompanySetup);
   syncAuthFieldAvailability(register ? 'register' : 'login');
-  $('authTitle').textContent = state.needsCompanySetup ? 'Finish registration' : (register ? 'Register company' : 'Login');
+  $('authTitle').textContent = state.needsCompanySetup
+    ? 'Finish registration'
+    : (register ? 'Register company' : 'Login');
   $('authLead').textContent = state.needsCompanySetup
-    ? 'Your account exists. Complete the company profile to continue.'
-    : (register ? 'Create your transporter account and choose operating regions.' : 'Open your company dashboard.');
+    ? 'Your account exists. Complete the company profile to continue. / Akaunti ipo. Kamilisha wasifu wa kampuni.'
+    : (register
+      ? 'Create your transporter account and choose operating regions. / Sajili akaunti na chagua maeneo.'
+      : 'Open your company dashboard. / Fungua dashibodi ya kampuni.');
   $('authSubmit').textContent = register ? 'Continue' : 'Login';
   $('authSubmit').type = 'submit';
-  $('authSwitch').textContent = register ? 'Already have an account?' : 'Need an account?';
+  $('authSubmit').disabled = false;
+  $('authSwitch').textContent = register
+    ? 'Already have an account? / Una akaunti?'
+    : 'Need an account? / Unahitaji akaunti?';
   $('authSwitch').classList.toggle('hidden', state.needsCompanySetup);
-  $('authSuccess').classList.add('hidden');
-  $('authSuccess').textContent = '';
+  if (!state.needsCompanySetup) {
+    $('authSuccess').classList.add('hidden');
+    $('authSuccess').textContent = '';
+  }
+  $('authError').textContent = '';
   if (register) {
     initRegionControls();
     setRegisterStep(registerStep || 1);
+  } else {
+    $('registerFields')?.querySelectorAll('input, select, textarea').forEach((input) => {
+      input.disabled = true;
+      input.required = false;
+    });
   }
 }
 
@@ -6319,16 +6374,22 @@ async function createCarrierFromRegistration(user, data, email) {
   const phone = String(data.get('phone') || '').trim();
   const coverageAllTanzania = Boolean(data.get('coverageAllTanzania'));
   const coverageRegions = coverageAllTanzania ? [] : selectedCoverageRegions();
-  if (!companyName) throw new Error('Enter the company name.');
-  if (!region) throw new Error('Select the company base region.');
-  if (!phone) throw new Error('Enter an active company phone number.');
+  if (!companyName) throw new Error(bilingual('Enter the company name.', 'Weka jina la kampuni.'));
+  if (!region) throw new Error(bilingual('Select the company base region.', 'Chagua mkoa wa makao makuu.'));
+  if (!phone) throw new Error(bilingual('Enter an active company phone number.', 'Weka simu hai ya kampuni.'));
   if (!coverageAllTanzania && !coverageRegions.length) {
-    throw new Error('Select All Tanzania or at least one operating region.');
+    throw new Error(bilingual(
+      'Select All Tanzania or at least one operating region.',
+      'Chagua Mikoa yote au angalau mkoa mmoja.',
+    ));
   }
   // Duplicate phone guard (best-effort; rules may still allow)
   const phoneClash = await getDocs(query(collection(db, 'carriers'), where('phone', '==', phone), limit(1)));
   if (!phoneClash.empty && phoneClash.docs[0].id !== carrierId) {
-    throw new Error('This company phone is already registered.');
+    throw new Error(bilingual(
+      'This company phone is already registered.',
+      'Simu hii ya kampuni tayari imesajiliwa.',
+    ));
   }
   await setDoc(doc(db, 'carriers', carrierId), {
     ownerUid: carrierId,
@@ -6376,8 +6437,19 @@ function bindAuth() {
       location.replace('#/overview');
       return;
     }
+    if (mode === 'register' && !state.needsCompanySetup) {
+      registerStep = 1;
+    }
+    $('authError').textContent = '';
+    if (!state.needsCompanySetup) {
+      $('authSuccess').classList.add('hidden');
+      $('authSuccess').textContent = '';
+    }
     rememberAuthIntent(mode);
-    location.hash = mode === 'register' ? '#/register' : '#/login';
+    const nextHash = mode === 'register' ? '#/register' : '#/login';
+    if (location.hash !== nextHash) {
+      location.hash = nextHash;
+    }
     showPublic(mode);
   };
   $('heroCta')?.addEventListener('click', () => open('register'));
@@ -6392,6 +6464,10 @@ function bindAuth() {
   $('menuRegister')?.addEventListener('click', () => { closePublicMenu(); open('register'); });
   $('authBackHome')?.addEventListener('click', () => {
     clearAuthIntent();
+    registerStep = 1;
+    $('authError').textContent = '';
+    $('authSuccess').classList.add('hidden');
+    $('authSuccess').textContent = '';
     location.hash = '#/';
     showPublic('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -6428,17 +6504,28 @@ function bindAuth() {
     $('authError').textContent = '';
     $('authSuccess').classList.add('hidden');
     const email = String($('loginEmail')?.value || '').trim().toLowerCase();
-    if (!email) {
-      $('authError').textContent = 'Enter your business email first.';
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      $('authError').textContent = bilingual(
+        'Enter your business email first.',
+        'Weka barua pepe ya biashara kwanza.',
+      );
+      $('loginEmail')?.focus();
       return;
     }
+    const btn = $('forgotPassword');
+    if (btn) btn.disabled = true;
     try {
       await sendPasswordResetEmail(auth, email);
-      $('authSuccess').textContent = 'Password reset email sent. Check your inbox.';
+      $('authSuccess').textContent = bilingual(
+        'Password reset email sent. Check your inbox.',
+        'Barua ya kuweka nenosiri upya imetumwa. Angalia inbox yako.',
+      );
       $('authSuccess').classList.remove('hidden');
     } catch (error) {
       logAuthErrorCode(error);
       $('authError').textContent = loginAuthErrorMessage(error);
+    } finally {
+      if (btn) btn.disabled = false;
     }
   });
   document.addEventListener('click', (event) => {
@@ -6466,18 +6553,25 @@ function bindAuth() {
       if (!validateRegisterStep(registerStep)) return;
       $('authError').textContent = '';
       setRegisterStep(registerStep + 1);
-      if (state.needsCompanySetup && registerStep === 2) {
-        $('authSubmit').textContent = 'Create company';
-      }
       return;
     }
     $('authError').textContent = '';
-    if (state.mode === 'register' && !validateRegisterStep(registerStep)) return;
+    if (state.mode === 'register') {
+      if (!validateRegisterStep(registerStep)) return;
+    } else if (!validateLoginForm()) {
+      return;
+    }
     if (!state.needsCompanySetup) {
       $('authSuccess').classList.add('hidden');
     }
     const submitBtn = $('authSubmit');
     submitBtn.disabled = true;
+    // Ensure earlier register steps are included even if a prior path disabled them.
+    if (state.mode === 'register') {
+      $('registerFields')?.querySelectorAll('input, select, textarea').forEach((input) => {
+        input.disabled = false;
+      });
+    }
     const data = new FormData(event.target);
     try {
       if (state.mode === 'register') {
@@ -6492,7 +6586,10 @@ function bindAuth() {
         }
         const { email, password } = readRegisterCredentials();
         if (!email || !password) {
-          $('authError').textContent = 'Enter business email and password.';
+          $('authError').textContent = bilingual(
+            'Enter business email and password.',
+            'Weka barua pepe ya biashara na nenosiri.',
+          );
           return;
         }
         const credential = await createUserWithEmailAndPassword(auth, email, password);
@@ -6500,10 +6597,6 @@ function bindAuth() {
         clearAuthIntent();
       } else {
         const { email, password } = readLoginCredentials();
-        if (!email || !password) {
-          $('authError').textContent = 'Enter business email and password.';
-          return;
-        }
         try {
           await signInWithEmailAndPassword(auth, email, password);
         } catch (error) {
