@@ -307,8 +307,27 @@ function quoteCommission(amount) {
   if (fee <= 0) return 0;
   return Math.round(fee * QUOTE_COMMISSION_RATE);
 }
+const NON_CUSTOMER_CANCEL = new Set(['dispatch', 'driver', 'company', 'carrier', 'agent', 'transporter']);
+
+function customerCancelled(item) {
+  if (!item) return false;
+  const by = String(item.cancelledBy || item.canceledBy || '').trim().toLowerCase();
+  const status = String(item.shipmentStatus || item.status || '').trim().toLowerCase();
+  const stage = String(item.haulStage || '').trim().toLowerCase();
+  const quote = String(item.quoteStatus || '').trim().toLowerCase();
+  if (by === 'customer') return true;
+  if (stage === 'cancelled' || stage === 'canceled') return true;
+  if (quote === 'declined') return true;
+  if (status === 'cancelled' || status === 'canceled') return !NON_CUSTOMER_CANCEL.has(by);
+  return false;
+}
+
+function transporterShipment(item) {
+  return Boolean(item) && !customerCancelled(item);
+}
+
 function isBusParcel(order) {
-  if (!order || order.status === 'cancelled') return false;
+  if (!order || customerCancelled(order) || order.status === 'cancelled') return false;
   if (norm(order.flow) !== 'parcel') return false;
   const mode = norm(order.outsideShippingMode);
   if (['express', 'air', 'flight', 'ndege'].includes(mode)) return false;
@@ -1604,13 +1623,17 @@ function listen() {
   const buckets = { offered: [], owned: [] };
   const publishShipments = () => {
     const map = new Map();
-    [...buckets.offered, ...buckets.owned].forEach((item) => map.set(item.id, item));
+    [...buckets.offered, ...buckets.owned].forEach((item) => {
+      if (!transporterShipment(item)) return;
+      map.set(item.id, item);
+    });
     // Accept can change status before the owned query delivers the doc. Keep the open card.
     const prior = state.shipments || [];
     Object.keys(state.pendingStages || {}).forEach((id) => {
       if (map.has(id)) return;
       const prev = prior.find((item) => item.id === id);
-      if (prev) map.set(id, { ...prev });
+      const pending = state.pendingStages[id] || {};
+      if (prev && transporterShipment({ ...prev, ...pending })) map.set(id, { ...prev });
     });
     state.shipments = [...map.values()].map((item) => {
       const pending = state.pendingStages[item.id];
@@ -1623,24 +1646,25 @@ function listen() {
         return item;
       }
       return { ...item, ...pending, stagePending: true };
-    });
+    }).filter(transporterShipment);
   };
   const watch = (q, apply, paint = true) => state.unsubscribers.push(onSnapshot(q, (snap) => {
     apply(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
     if (paint) scheduleRender();
   }));
   watch(query(collection(db, 'carrierShipments'), where('offeredCarrierId', '==', id)), (rows) => {
-    const incoming = rows.filter((item) => item.shipmentStatus === 'assigned' && !state.knownOfferIds?.has(item.id));
+    const live = rows.filter(transporterShipment);
+    const incoming = live.filter((item) => item.shipmentStatus === 'assigned' && !state.knownOfferIds?.has(item.id));
     if (state.offersReady) {
       incoming.forEach((item) => announceIncomingOffer(item));
     }
-    state.knownOfferIds = new Set(rows.filter((item) => item.shipmentStatus === 'assigned').map((item) => item.id));
+    state.knownOfferIds = new Set(live.filter((item) => item.shipmentStatus === 'assigned').map((item) => item.id));
     state.offersReady = true;
-    buckets.offered = rows;
+    buckets.offered = live;
     publishShipments();
   });
   watch(query(collection(db, 'carrierShipments'), where('carrierId', '==', id)), (rows) => {
-    buckets.owned = rows;
+    buckets.owned = rows.filter(transporterShipment);
     publishShipments();
   });
   watch(query(collection(db, 'carrierRoutes'), where('carrierId', '==', id)), (rows) => { state.routes = rows; });
@@ -1653,8 +1677,14 @@ function listen() {
     const fresh = next.filter((item) => !prevIds.has(item.id) && !item.readAt && item.read !== true);
     state.notes = next;
     refreshNoteBadge();
-    if (state.notesReady && fresh.some((item) => item.type === 'carrier_offer' || /oda/i.test(item.title || ''))) {
-      fresh.filter((item) => item.type === 'carrier_offer' || /oda/i.test(item.title || '')).forEach((item) => {
+    const offerNote = (item) => {
+      const type = String(item?.type || '');
+      if (type === 'carrier_offer_cancelled' || type === 'quote_declined') return false;
+      if (/imefutwa|amekataa|cancelled/i.test(item?.title || '')) return false;
+      return type === 'carrier_offer' || /oda/i.test(item?.title || '');
+    };
+    if (state.notesReady && fresh.some(offerNote)) {
+      fresh.filter(offerNote).forEach((item) => {
         if (state.knownOfferIds?.has(item.orderId)) return;
         announceIncomingOffer({
           id: item.orderId || item.id,
@@ -2494,6 +2524,7 @@ function agentTookOrder(item) {
 }
 
 function orderBucket(item) {
+  if (customerCancelled(item)) return '';
   const mineId = state.carrier?.id;
   const status = String(item.shipmentStatus || '');
   const step = String(item.trackStep || '');
@@ -3031,6 +3062,8 @@ function ordersDesk(tab) {
 }
 
 async function sendCompanyQuote(shipmentId, amount) {
+  const current = state.shipments.find((item) => item.id === shipmentId);
+  if (customerCancelled(current)) throw new Error('Mteja amefuta oda hii.');
   const rate = QUOTE_COMMISSION_RATE;
   const draftCommission = quoteCommission(amount);
   const label = `TZS ${amount.toLocaleString('en-US')}`;
@@ -3203,7 +3236,7 @@ function forwardCustomerStage(order, shipment) {
 }
 
 function availableOrdersPage() {
-  const rows = state.shipments.filter((item) => item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id);
+  const rows = state.shipments.filter((item) => transporterShipment(item) && item.shipmentStatus === 'assigned' && item.offeredCarrierId === state.carrier?.id);
   return `<section class="panel"><div class="section-head"><h2>Available Orders</h2>
     <input id="orderSearch" type="search" placeholder="Search pickup, destination, reference…" /></div>
     ${ordersTable(rows, true)}</section>`;
@@ -3219,6 +3252,7 @@ function historyStatusKey(item) {
 }
 
 function isHistoryPast(item) {
+  if (customerCancelled(item)) return false;
   return Boolean(item?.carrierId === state.carrier?.id && historyStatusKey(item));
 }
 
@@ -3323,7 +3357,7 @@ function historyPage() {
 
 function transitOrdersPage() {
   const rows = state.shipments
-    .filter((item) => item.carrierId === state.carrier?.id && item.shipmentStatus === 'in_transit')
+    .filter((item) => transporterShipment(item) && item.carrierId === state.carrier?.id && item.shipmentStatus === 'in_transit')
     .sort((a, b) => String(a.orderNumber || a.parcelCode || a.id).localeCompare(String(b.orderNumber || b.parcelCode || b.id), undefined, { numeric: true, sensitivity: 'base' }));
   return `<section class="panel"><div class="section-head"><h2>In Transit</h2><span class="muted">On the road only</span></div>${ordersTable(rows, false)}</section>`;
 }
@@ -5711,6 +5745,7 @@ async function applyManifestMark(id, stage) {
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error('Shipment not found.');
   const current = snap.data();
+  if (customerCancelled({ id, ...current })) throw new Error('Mteja amefuta oda hii.');
   if (!mine({ id, ...current }) || current.carrierId !== state.carrier?.id) throw new Error('Not your shipment.');
   if (quotePending({ id, ...current })) throw new Error('Mteja bado hajaukubali bei ya usafirishaji.');
   if (stage === 'loaded') {
@@ -5972,6 +6007,10 @@ async function onViewClick(event) {
   const snap = await getDoc(ref);
   if (!snap.exists() || !mine({ id, ...snap.data() })) return;
   const current = snap.data();
+  if (customerCancelled({ id, ...current })) {
+    window.alert('Mteja amefuta oda hii.');
+    return;
+  }
   if (quotePending({ id, ...current }) && ['set-status', 'verify', 'accept', 'start-transit', 'deliver', 'journey', 'track', 'pickup'].includes(act)) {
     window.alert('Mteja bado hajaukubali bei ya usafirishaji.');
     return;
