@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Manrope:wght@400;500;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20261111b" />
+  <link rel="stylesheet" href="./styles.css?v=20261111c" />
 </head>
 <body>
   <div id="public" class="site-public">
@@ -164,26 +164,40 @@
           <button type="button" id="modeRegister" role="tab" aria-selected="false">Jisajili</button>
         </div>
         <form id="authForm" novalidate>
-          <div id="registerFields" class="hidden">
-            <label for="regCompanyName">Jina la kampuni</label>
+          <p class="auth-step" id="authStep"></p>
+          <div id="stepPhone">
+            <label for="authPhone">Namba ya simu</label>
+            <input id="authPhone" name="phone" placeholder="07XXXXXXXX" inputmode="tel" autocomplete="tel" />
+          </div>
+          <div id="stepOtp" class="hidden">
+            <label for="authOtp">Msimbo wa SMS</label>
+            <input id="authOtp" class="auth-otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" />
+            <div class="auth-row">
+              <button class="btn link quiet" id="otpChangePhone" type="button">Badilisha namba</button>
+              <button class="btn link quiet" id="otpResend" type="button">Tuma tena</button>
+            </div>
+          </div>
+          <div id="stepDetails" class="hidden">
+            <label for="regName">Jina lako</label>
+            <input id="regName" name="contactPerson" autocomplete="name" />
+            <label for="regCompanyName">Kampuni</label>
             <input id="regCompanyName" name="companyName" autocomplete="organization" />
-            <label for="regPhone">Simu ya kampuni</label>
-            <input id="regPhone" name="phone" placeholder="07XXXXXXXX" inputmode="tel" autocomplete="tel" />
-            <label for="regRegion">Mkoa wa makao</label>
+            <label for="regRegion">Mkoa</label>
             <select id="regRegion" name="region">
               <option value="">Chagua mkoa</option>
             </select>
-          </div>
-          <div id="registerCredentials" class="hidden">
-            <label for="regEmail">Barua pepe ya biashara</label>
-            <input id="regEmail" name="regEmail" type="email" autocomplete="username" inputmode="email" />
-            <label for="regPassword">Nenosiri</label>
-            <div class="password-wrap">
-              <input id="regPassword" name="regPassword" type="password" autocomplete="new-password" data-password />
-              <button class="password-toggle" type="button" data-toggle-password aria-label="Onyesha nenosiri">Onyesha</button>
+            <button class="btn link quiet" id="toggleEmailExtra" type="button">Ongeza barua pepe na nenosiri</button>
+            <div id="emailExtra" class="hidden">
+              <label for="regEmail">Barua pepe</label>
+              <input id="regEmail" name="regEmail" type="email" autocomplete="email" inputmode="email" />
+              <label for="regPassword">Nenosiri</label>
+              <div class="password-wrap">
+                <input id="regPassword" name="regPassword" type="password" autocomplete="new-password" data-password />
+                <button class="password-toggle" type="button" data-toggle-password aria-label="Onyesha nenosiri">Onyesha</button>
+              </div>
             </div>
           </div>
-          <div id="loginFields">
+          <div id="stepEmail" class="hidden">
             <label for="loginEmail">Barua pepe</label>
             <input id="loginEmail" name="email" type="email" autocomplete="username" inputmode="email" />
             <label for="loginPassword">Nenosiri</label>
@@ -195,7 +209,9 @@
           </div>
           <p class="form-success hidden" id="authSuccess"></p>
           <p class="form-error" id="authError" role="alert"></p>
-          <button class="btn primary" type="submit" id="authSubmit">Ingia</button>
+          <button class="btn primary" type="submit" id="authSubmit">Tuma msimbo</button>
+          <button class="auth-quiet" id="useEmailLogin" type="button">Ingia kwa barua pepe</button>
+          <button class="auth-quiet hidden" id="usePhoneLogin" type="button">Ingia kwa simu</button>
           <p class="auth-fine" id="authFine"></p>
         </form>
       </div>
@@ -246,6 +262,6 @@
       <button type="button" class="photo-lightbox-x" data-lightbox-close aria-label="Funga">×</button>
     </figure>
   </div>
-  <script type="module" src="./app.js?v=20261111b"></script>
+  <script type="module" src="./app.js?v=20261111c"></script>
 </body>
 </html>

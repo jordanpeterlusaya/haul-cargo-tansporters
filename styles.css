@@ -5185,6 +5185,56 @@ body:has(#app:not(.hidden)) {
   line-height: 1.45;
   color: rgba(17, 17, 17, 0.55);
 }
+#public .auth-step {
+  margin: 18px 0 0;
+  min-height: 1em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(17, 17, 17, 0.45);
+}
+#public .auth-step:empty { display: none; }
+#public .auth-otp {
+  letter-spacing: 0.38em;
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+#public .auth-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+#public .auth-panel .btn.link.quiet {
+  margin: 8px 0 0;
+  padding: 0;
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 650;
+  color: rgba(17, 17, 17, 0.55);
+}
+#public .auth-quiet {
+  display: block;
+  width: 100%;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(17, 17, 17, 0.45);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+#public .auth-quiet.hidden { display: none; }
+#public .auth-panel input:disabled {
+  background: #f7f6f1;
+  color: rgba(17, 17, 17, 0.72);
+}
 #public .auth-panel .form-error {
   color: #9f1239;
   background: #fff1f2;

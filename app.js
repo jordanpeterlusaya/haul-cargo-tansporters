@@ -1,11 +1,11 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js';
 import {
   browserLocalPersistence,
-  createUserWithEmailAndPassword,
   getAuth,
   onAuthStateChanged,
   sendPasswordResetEmail,
   setPersistence,
+  signInWithCustomToken,
   signInWithEmailAndPassword,
   signOut,
 } from 'https://www.gstatic.com/firebasejs/12.12.0/firebase-auth.js';
@@ -119,6 +119,12 @@ const state = {
   notesReady: false,
   drivers: [],
   mode: 'login',
+  authStep: 'phone',
+  emailFallback: false,
+  otpPhone: '',
+  otpTicket: '',
+  otpMasked: '',
+  otpCooldown: 0,
   needsCompanySetup: false,
   registrationLock: false,
   unsubscribers: [],
@@ -278,6 +284,11 @@ function smsPhone(value) {
   if (raw.startsWith('255') && raw.length >= 12) return raw.slice(0, 12);
   if (raw.length === 9) return `255${raw}`;
   return raw;
+}
+function orderSmsPhone(carrier) {
+  if (!carrier || carrier.phoneVerified !== true) return '';
+  const number = smsPhone(carrier.notificationPhone || carrier.phone || carrier.phoneNormalized || '');
+  return /^255\d{9}$/.test(number) ? number : '';
 }
 function when(value) {
   const ms = value?.toDate ? value.toDate().getTime() : new Date(value || 0).getTime();
@@ -1087,20 +1098,6 @@ function readLoginCredentials() {
   };
 }
 
-function readRegisterCredentials() {
-  return {
-    email: String($('regEmail')?.value || '').trim().toLowerCase(),
-    password: String($('regPassword')?.value || ''),
-  };
-}
-
-function setControlEnabled(root, enabled) {
-  root?.querySelectorAll('input, select, textarea').forEach((input) => {
-    input.disabled = !enabled;
-    input.required = false;
-  });
-}
-
 function selectedCoverageRegions(root = document) {
   const scope = root instanceof Element ? root : document;
   return [...scope.querySelectorAll('input[name="coverageRegion"]:checked')]
@@ -1112,38 +1109,293 @@ function validBusinessEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function validateRegisterForm() {
+let otpCooldownTimer = null;
+
+function clearOtpCooldown() {
+  if (!otpCooldownTimer) return;
+  clearInterval(otpCooldownTimer);
+  otpCooldownTimer = null;
+}
+
+function paintOtpResend() {
+  const btn = $('otpResend');
+  if (!btn) return;
+  const wait = state.otpCooldown > 0;
+  btn.disabled = wait;
+  btn.textContent = wait ? `Tuma tena (${state.otpCooldown}s)` : 'Tuma tena';
+}
+
+function startOtpCooldown(seconds) {
+  clearOtpCooldown();
+  state.otpCooldown = Math.max(0, Math.round(Number(seconds) || 0));
+  paintOtpResend();
+  if (state.otpCooldown <= 0) return;
+  otpCooldownTimer = setInterval(() => {
+    state.otpCooldown = Math.max(0, state.otpCooldown - 1);
+    paintOtpResend();
+    if (state.otpCooldown <= 0) clearOtpCooldown();
+  }, 1000);
+}
+
+function calmAuthError(error) {
+  const code = String(error?.code || '');
+  if (code.startsWith('auth/') || ['permission-denied', 'unavailable', 'failed-precondition'].includes(code)) {
+    return authErrorMessage(error);
+  }
+  const message = String(error?.message || '').trim();
+  if (!message || /firebase/i.test(message) || /^auth\//.test(message) || message.length > 180) {
+    return 'Imeshindwa. Jaribu tena.';
+  }
+  return message;
+}
+
+async function postCarrierAuth(path, body, token) {
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let response;
+  try {
+    response = await fetch(`${apiBase()}${path}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  } catch {
+    const error = new Error('Tatizo la mtandao. Angalia muunganisho wako.');
+    error.code = 'network';
+    throw error;
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(calmAuthError({ message: payload?.error, code: payload?.code }));
+    error.code = String(payload?.code || '');
+    error.statusCode = response.status;
+    throw error;
+  }
+  return payload;
+}
+
+function authPhoneValue() {
+  const typed = smsPhone($('authPhone')?.value || '');
+  if (/^255\d{9}$/.test(typed)) return typed;
+  return smsPhone(state.otpPhone || '');
+}
+
+function paintAuth() {
+  const register = state.mode === 'register';
+  const step = state.emailFallback ? 'email' : (state.authStep || 'phone');
+  $('stepPhone')?.classList.toggle('hidden', step !== 'phone');
+  $('stepOtp')?.classList.toggle('hidden', step !== 'otp');
+  $('stepDetails')?.classList.toggle('hidden', step !== 'details');
+  $('stepEmail')?.classList.toggle('hidden', step !== 'email');
+  $('authModes')?.classList.toggle('hidden', step !== 'phone' || state.needsCompanySetup);
+  $('useEmailLogin')?.classList.toggle('hidden', !(state.mode === 'login' && step === 'phone'));
+  $('usePhoneLogin')?.classList.toggle('hidden', step !== 'email');
+  $('modeLogin')?.setAttribute('aria-selected', register ? 'false' : 'true');
+  $('modeRegister')?.setAttribute('aria-selected', register ? 'true' : 'false');
+  const copy = {
+    phone: {
+      title: state.needsCompanySetup ? 'Thibitisha simu' : (register ? 'Jisajili' : 'Ingia'),
+      lead: 'Tutatuma msimbo kwenye simu yako.',
+      step: register || state.needsCompanySetup ? 'Hatua 1 ya 3' : 'Hatua 1 ya 2',
+      submit: 'Tuma msimbo',
+    },
+    otp: {
+      title: 'Weka msimbo',
+      lead: state.otpMasked ? `Msimbo umetumwa kwa ${state.otpMasked}.` : 'Weka msimbo uliotumwa kwa SMS.',
+      step: register || state.needsCompanySetup ? 'Hatua 2 ya 3' : 'Hatua 2 ya 2',
+      submit: 'Thibitisha',
+    },
+    details: {
+      title: 'Akaunti yako',
+      lead: 'Jina na kampuni. Simu hii ndiyo itapokea SMS za oda.',
+      step: 'Hatua 3 ya 3',
+      submit: 'Fungua portal',
+    },
+    email: {
+      title: 'Ingia',
+      lead: 'Kwa akaunti za zamani zenye barua pepe.',
+      step: '',
+      submit: 'Ingia',
+    },
+  };
+  const view = copy[step] || copy.phone;
+  if ($('authTitle')) $('authTitle').textContent = view.title;
+  if ($('authLead')) $('authLead').textContent = view.lead;
+  if ($('authStep')) $('authStep').textContent = view.step;
+  if ($('authSubmit')) {
+    $('authSubmit').textContent = view.submit;
+    $('authSubmit').disabled = false;
+  }
+  const fine = $('authFine');
+  if (fine) fine.textContent = step === 'details' ? 'Kwa kusajili, unakubali masharti ya washirika wa HAUL.' : '';
+  paintOtpResend();
+}
+
+async function sendAuthOtp() {
+  const phone = authPhoneValue();
+  if (!/^255\d{9}$/.test(phone)) {
+    $('authError').textContent = 'Weka namba sahihi, mfano 07XXXXXXXX.';
+    $('authPhone')?.focus();
+    return;
+  }
+  const purpose = state.mode === 'register' || state.needsCompanySetup ? 'signup' : 'login';
+  const result = await postCarrierAuth('/carrier-auth/otp/send', { phone, purpose });
+  if (result.sent !== true) {
+    throw new Error('Msimbo haujatumwa. Jaribu tena.');
+  }
+  state.otpPhone = phone;
+  state.otpMasked = String(result.phoneMasked || '');
+  state.otpTicket = '';
+  state.authStep = 'otp';
+  state.emailFallback = false;
+  startOtpCooldown(result.cooldownSeconds || 60);
+  paintAuth();
+  $('authOtp')?.focus();
+}
+
+async function finishCustomSignIn(customToken) {
+  clearAuthIntent();
+  state.needsCompanySetup = false;
+  state.registrationLock = false;
+  await signInWithCustomToken(auth, customToken);
+}
+
+async function verifyAuthOtp() {
+  const code = String($('authOtp')?.value || '').replace(/\D/g, '');
+  if (code.length !== 6) {
+    $('authError').textContent = 'Weka msimbo wa tarakimu 6.';
+    $('authOtp')?.focus();
+    return;
+  }
+  if (!state.otpPhone) {
+    state.authStep = 'phone';
+    paintAuth();
+    $('authError').textContent = 'Weka namba ya simu kwanza.';
+    return;
+  }
+  const result = await postCarrierAuth('/carrier-auth/otp/verify', { phone: state.otpPhone, code });
+  state.otpTicket = String(result.otpTicket || '');
+  if (!state.otpTicket) throw new Error('Thibitisho halijakamilika. Jaribu tena.');
+  if (state.mode === 'register' || state.needsCompanySetup) {
+    state.authStep = 'details';
+    paintAuth();
+    initRegionControls();
+    $('regName')?.focus();
+    return;
+  }
+  try {
+    const login = await postCarrierAuth('/carrier-auth/otp/login', {
+      phone: state.otpPhone,
+      otpTicket: state.otpTicket,
+    });
+    await finishCustomSignIn(login.customToken);
+  } catch (error) {
+    if (error.code !== 'no_account') throw error;
+    state.mode = 'register';
+    state.authStep = 'details';
+    rememberAuthIntent('register');
+    if (location.hash !== '#/register') location.hash = '#/register';
+    paintAuth();
+    initRegionControls();
+    if ($('authLead')) $('authLead').textContent = 'Hakuna akaunti kwa simu hii. Kamilisha usajili.';
+  }
+}
+
+function readDetailFields() {
+  const contactPerson = String($('regName')?.value || '').trim();
   const companyName = String($('regCompanyName')?.value || '').trim();
-  const phoneDigits = String($('regPhone')?.value || '').replace(/\D/g, '');
   const region = String($('regRegion')?.value || '').trim();
-  if (!companyName) {
+  const emailOpen = !$('emailExtra')?.classList.contains('hidden');
+  const email = emailOpen ? String($('regEmail')?.value || '').trim().toLowerCase() : '';
+  const password = emailOpen ? String($('regPassword')?.value || '') : '';
+  if (contactPerson.length < 2) {
+    $('authError').textContent = 'Weka jina lako.';
+    $('regName')?.focus();
+    return null;
+  }
+  if (companyName.length < 2) {
     $('authError').textContent = 'Weka jina la kampuni.';
     $('regCompanyName')?.focus();
-    return false;
-  }
-  if (phoneDigits.length < 9 || phoneDigits.length > 15) {
-    $('authError').textContent = 'Weka simu sahihi ya kampuni, mfano 07XXXXXXXX.';
-    $('regPhone')?.focus();
-    return false;
+    return null;
   }
   if (!region || !TZ_REGIONS.includes(region)) {
-    $('authError').textContent = 'Chagua mkoa wa makao makuu.';
+    $('authError').textContent = 'Chagua mkoa wa makao.';
     $('regRegion')?.focus();
-    return false;
+    return null;
   }
-  if (state.needsCompanySetup) return true;
-  const { email, password } = readRegisterCredentials();
-  if (!validBusinessEmail(email)) {
-    $('authError').textContent = 'Weka barua pepe sahihi ya biashara.';
-    $('regEmail')?.focus();
-    return false;
+  if (email || password) {
+    if (!validBusinessEmail(email)) {
+      $('authError').textContent = 'Weka barua pepe sahihi.';
+      $('regEmail')?.focus();
+      return null;
+    }
+    if (password.length < 6) {
+      $('authError').textContent = 'Nenosiri liwe angalau herufi 6.';
+      $('regPassword')?.focus();
+      return null;
+    }
   }
-  if (password.length < 6) {
-    $('authError').textContent = 'Nenosiri liwe angalau herufi 6.';
-    $('regPassword')?.focus();
-    return false;
+  return { contactPerson, companyName, region, email, password };
+}
+
+async function submitAuthDetails() {
+  const fields = readDetailFields();
+  if (!fields) return;
+  if (!state.otpTicket || !/^255\d{9}$/.test(state.otpPhone || '')) {
+    state.authStep = 'phone';
+    paintAuth();
+    $('authError').textContent = 'Thibitisha simu kwanza.';
+    return;
   }
-  return true;
+  if (state.needsCompanySetup && state.user) {
+    const data = new FormData();
+    data.set('companyName', fields.companyName);
+    data.set('contactPerson', fields.contactPerson);
+    data.set('region', fields.region);
+    data.set('phone', state.otpPhone);
+    const email = String(state.user.email || fields.email || '').trim().toLowerCase();
+    await createCarrierFromRegistration(state.user, data, email);
+    const idToken = await state.user.getIdToken();
+    await postCarrierAuth('/carrier-auth/confirm-phone', {
+      phone: state.otpPhone,
+      otpTicket: state.otpTicket,
+      carrierId: state.user.uid,
+    }, idToken);
+    state.needsCompanySetup = false;
+    state.otpTicket = '';
+    clearAuthIntent();
+    await loadSession(state.user);
+    return;
+  }
+  const body = {
+    phone: state.otpPhone,
+    otpTicket: state.otpTicket,
+    companyName: fields.companyName,
+    contactPerson: fields.contactPerson,
+    region: fields.region,
+  };
+  if (fields.email) {
+    body.email = fields.email;
+    body.password = fields.password;
+  }
+  try {
+    const registered = await postCarrierAuth('/carrier-auth/otp/register', body);
+    await finishCustomSignIn(registered.customToken);
+  } catch (error) {
+    if (error.code !== 'phone_taken') throw error;
+    const login = await postCarrierAuth('/carrier-auth/otp/login', {
+      phone: state.otpPhone,
+      otpTicket: state.otpTicket,
+    });
+    await finishCustomSignIn(login.customToken);
+  }
+}
+
+async function submitEmailLogin() {
+  if (!validateLoginForm()) return;
+  const { email, password } = readLoginCredentials();
+  await signInWithEmailAndPassword(auth, email, password);
+  clearAuthIntent();
 }
 
 function validateLoginForm() {
@@ -1228,42 +1480,27 @@ function showPublic(authMode) {
   stopHeroCarousel();
   closePublicMenu();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  const modeChanged = state.mode !== authMode;
   state.mode = authMode;
-  const register = authMode === 'register';
-  const setup = register && state.needsCompanySetup;
-  $('registerFields')?.classList.toggle('hidden', !register);
-  $('registerCredentials')?.classList.toggle('hidden', !register || setup);
-  $('loginFields')?.classList.toggle('hidden', register);
-  setControlEnabled($('registerFields'), register);
-  setControlEnabled($('registerCredentials'), register && !setup);
-  setControlEnabled($('loginFields'), !register);
-  $('authModes')?.classList.toggle('hidden', setup);
-  $('modeLogin')?.setAttribute('aria-selected', register ? 'false' : 'true');
-  $('modeRegister')?.setAttribute('aria-selected', register ? 'true' : 'false');
-  $('authTitle').textContent = setup ? 'Kamilisha usajili' : (register ? 'Jisajili' : 'Ingia');
-  $('authLead').textContent = setup
-    ? 'Akaunti ipo. Weka taarifa za kampuni ili kuingia.'
-    : (register ? 'Fungua akaunti ya kampuni ya usafirishaji.' : 'Dashibodi ya kampuni yako.');
-  $('authSubmit').textContent = setup ? 'Hifadhi na fungua' : (register ? 'Tengeneza akaunti' : 'Ingia');
-  $('authSubmit').type = 'submit';
-  $('authSubmit').disabled = false;
-  const fine = $('authFine');
-  if (fine) {
-    fine.textContent = register && !setup
-      ? 'Kwa kusajili, unakubali masharti ya washirika wa HAUL.'
-      : '';
+  if (modeChanged && !state.otpTicket) {
+    state.authStep = state.needsCompanySetup ? 'phone' : 'phone';
+    state.emailFallback = false;
   }
   if (!state.needsCompanySetup) {
-    $('authSuccess').classList.add('hidden');
-    $('authSuccess').textContent = '';
+    $('authSuccess')?.classList.add('hidden');
+    if ($('authSuccess')) $('authSuccess').textContent = '';
   }
-  $('authError').textContent = '';
-  if (register) initRegionControls();
+  if ($('authError') && modeChanged) $('authError').textContent = '';
+  paintAuth();
+  if (authMode === 'register' || state.authStep === 'details') initRegionControls();
 }
 
 function showCompanySetup() {
   state.needsCompanySetup = true;
   state.mode = 'register';
+  state.authStep = 'phone';
+  state.emailFallback = false;
+  state.otpTicket = '';
   rememberAuthIntent('register');
   if (location.hash !== '#/register') location.hash = '#/register';
   showPublic('register');
@@ -3997,7 +4234,8 @@ function settingsPage() {
     <form id="profileForm" class="panel">
       <label>Jina la kampuni</label><input name="companyName" value="${esc(carrier.companyName || '')}" />
       <div class="form-grid"><div><label>Mhusika</label><input name="contactPerson" value="${esc(carrier.contactPerson || '')}" /></div>
-      <div><label>Simu</label><input name="phone" value="${esc(carrier.phone || '')}" /></div></div>
+      <div><label>Simu ya SMS</label><input value="${esc(orderSmsPhone(carrier) || 'Haijathibitishwa')}" disabled /></div></div>
+      <p class="muted">${orderSmsPhone(carrier) ? 'SMS za oda zinaenda namba hii iliyothibitishwa.' : 'SMS za oda hazitumwi mpaka simu ithibitishwe kwa OTP.'}</p>
       <label>Barua pepe</label><input value="${esc(carrier.email || '')}" disabled />
       <label>Mahali pa ofisi</label><input name="location" value="${esc(carrier.location || '')}" />
       <button class="btn primary" type="submit">Hifadhi</button></form>`;
@@ -4994,8 +5232,8 @@ function companyPages() {
 
       <section class="co-facts" aria-label="Company facts">
         <article class="co-fact">
-          <span>Phone</span>
-          <strong>${esc(carrier.phone || '—')}</strong>
+          <span>SMS ya oda</span>
+          <strong>${esc(orderSmsPhone(carrier) || 'Haijathibitishwa')}</strong>
         </article>
         <article class="co-fact">
           <span>Email</span>
@@ -5038,8 +5276,8 @@ function companyPages() {
             <input name="contactPerson" value="${esc(carrier.contactPerson || '')}" autocomplete="name" />
           </div>
           <div>
-            <label>Phone (SMS alerts)</label>
-            <input name="phone" value="${esc(carrier.phone || '')}" inputmode="tel" autocomplete="tel" />
+            <label>Simu ya SMS</label>
+            <input value="${esc(orderSmsPhone(carrier) || 'Haijathibitishwa')}" disabled />
           </div>
         </div>
         <label>Business email</label>
@@ -5055,7 +5293,8 @@ function companyPages() {
         </fieldset>
         <label>Business details</label>
         <textarea name="businessDetails">${esc(carrier.businessDetails || '')}</textarea>
-        <label class="check-row"><input type="checkbox" name="notifySms" value="1" ${carrier.notifySms !== false ? 'checked' : ''}/><span>SMS notifications to company phone</span></label>
+        <label class="check-row"><input type="checkbox" name="notifySms" value="1" ${carrier.notifySms !== false ? 'checked' : ''}/><span>Tuma SMS za oda kwenye simu iliyothibitishwa</span></label>
+        <p class="muted">${orderSmsPhone(carrier) ? `SMS zinaenda ${esc(orderSmsPhone(carrier))}.` : 'SMS za oda hazitumwi mpaka simu ithibitishwe kwa OTP.'}</p>
         <div class="co-edit-actions">
           <button class="btn primary" type="submit">Save profile</button>
           <button class="btn line" data-go="levels" type="button">View Level</button>
@@ -6204,18 +6443,9 @@ async function onViewSubmit(event) {
     if (!coverageAllTanzania && !coverageRegions.length && form.querySelector('#profileCoverageAll')) {
       throw new Error('Select All Tanzania or at least one operating region.');
     }
-    const phone = smsPhone(data.get('phone')) || String(data.get('phone') || '').trim();
-    if (phone) {
-      const phoneClash = await getDocs(query(collection(db, 'carriers'), where('phone', '==', phone), limit(1)));
-      if (!phoneClash.empty && phoneClash.docs[0].id !== id) {
-        throw new Error('This company phone is already registered.');
-      }
-    }
     const patch = {
       companyName: data.get('companyName'),
       contactPerson: data.get('contactPerson'),
-      phone,
-      phoneNormalized: phone,
       region: data.get('region') || state.carrier?.region || '',
       location: data.get('location'),
       physicalAddress: data.get('location') || '',
@@ -6317,21 +6547,23 @@ async function createCarrierFromRegistration(user, data, email) {
   const carrierId = user.uid;
   const companyName = String(data.get('companyName') || '').trim();
   const region = String(data.get('region') || '').trim();
-  const phoneRaw = String(data.get('phone') || '').trim();
-  const phone = smsPhone(phoneRaw) || phoneRaw;
+  const phone = smsPhone(state.otpPhone || data.get('phone') || '');
+  const contactPerson = String(data.get('contactPerson') || '').trim();
   if (!companyName) throw new Error('Weka jina la kampuni.');
   if (!region || !TZ_REGIONS.includes(region)) throw new Error('Chagua mkoa wa makao makuu.');
-  if (phone.replace(/\D/g, '').length < 9) throw new Error('Weka simu sahihi ya kampuni, mfano 07XXXXXXXX.');
-  if (await phoneAlreadyUsed(phoneRaw, carrierId)) {
+  if (!/^255\d{9}$/.test(phone)) throw new Error('Thibitisha simu kwanza.');
+  if (await phoneAlreadyUsed(phone, carrierId)) {
     throw new Error('Simu hii ya kampuni tayari imesajiliwa.');
   }
   await setDoc(doc(db, 'carriers', carrierId), {
     ownerUid: carrierId,
     companyName,
     name: companyName,
-    contactPerson: '',
+    contactPerson,
     phone,
     phoneNormalized: phone,
+    notificationPhone: phone,
+    phoneVerified: false,
     businessEmail: email,
     email,
     region,
@@ -6362,6 +6594,10 @@ async function createCarrierFromRegistration(user, data, email) {
     carrierId,
     role: 'owner',
     email,
+    phone,
+    phoneNormalized: phone,
+    notificationPhone: phone,
+    phoneVerified: false,
   });
 }
 
@@ -6395,6 +6631,12 @@ function bindAuth() {
   $('menuRegister')?.addEventListener('click', () => { closePublicMenu(); open('register'); });
   $('authBackHome')?.addEventListener('click', () => {
     clearAuthIntent();
+    state.authStep = 'phone';
+    state.emailFallback = false;
+    state.otpTicket = '';
+    state.otpMasked = '';
+    clearOtpCooldown();
+    state.otpCooldown = 0;
     $('authError').textContent = '';
     $('authSuccess').classList.add('hidden');
     $('authSuccess').textContent = '';
@@ -6431,6 +6673,42 @@ function bindAuth() {
   });
   $('modeLogin')?.addEventListener('click', () => open('login'));
   $('modeRegister')?.addEventListener('click', () => open('register'));
+  $('useEmailLogin')?.addEventListener('click', () => {
+    state.emailFallback = true;
+    $('authError').textContent = '';
+    paintAuth();
+    $('loginEmail')?.focus();
+  });
+  $('usePhoneLogin')?.addEventListener('click', () => {
+    state.emailFallback = false;
+    state.authStep = 'phone';
+    $('authError').textContent = '';
+    paintAuth();
+    $('authPhone')?.focus();
+  });
+  $('otpChangePhone')?.addEventListener('click', () => {
+    state.authStep = 'phone';
+    state.otpTicket = '';
+    $('authError').textContent = '';
+    paintAuth();
+    $('authPhone')?.focus();
+  });
+  $('otpResend')?.addEventListener('click', async () => {
+    if (state.otpCooldown > 0) return;
+    $('authError').textContent = '';
+    const btn = $('otpResend');
+    if (btn) btn.disabled = true;
+    try {
+      await sendAuthOtp();
+    } catch (error) {
+      logAuthErrorCode(error);
+      $('authError').textContent = calmAuthError(error);
+      paintOtpResend();
+    }
+  });
+  $('toggleEmailExtra')?.addEventListener('click', () => {
+    $('emailExtra')?.classList.toggle('hidden');
+  });
   $('forgotPassword')?.addEventListener('click', async () => {
     $('authError').textContent = '';
     $('authSuccess').classList.add('hidden');
@@ -6467,74 +6745,23 @@ function bindAuth() {
   $('authForm').onsubmit = async (event) => {
     event.preventDefault();
     $('authError').textContent = '';
-    if (state.mode === 'register') {
-      if (!validateRegisterForm()) return;
-    } else if (!validateLoginForm()) {
-      return;
-    }
-    if (!state.needsCompanySetup) {
-      $('authSuccess').classList.add('hidden');
-    }
+    $('authSuccess')?.classList.add('hidden');
     const submitBtn = $('authSubmit');
-    const previousLabel = submitBtn.textContent;
+    const step = state.emailFallback ? 'email' : (state.authStep || 'phone');
     submitBtn.disabled = true;
-    submitBtn.textContent = state.mode === 'register' ? 'Inasajili…' : 'Inaingia…';
-    if (state.mode === 'register') {
-      setControlEnabled($('registerFields'), true);
-      if (!state.needsCompanySetup) setControlEnabled($('registerCredentials'), true);
-    }
-    const data = new FormData(event.target);
+    submitBtn.textContent = step === 'phone' ? 'Inatuma…' : step === 'otp' ? 'Inathibitisha…' : step === 'details' ? 'Inafungua…' : 'Inaingia…';
     try {
-      if (state.mode === 'register') {
-        if (state.needsCompanySetup && state.user) {
-          const email = String(state.user.email || '').trim().toLowerCase();
-          await createCarrierFromRegistration(state.user, data, email);
-          state.needsCompanySetup = false;
-          clearAuthIntent();
-          await loadSession(state.user);
-          return;
-        }
-        const { email, password } = readRegisterCredentials();
-        state.registrationLock = true;
-        const credential = await createUserWithEmailAndPassword(auth, email, password);
-        try {
-          await createCarrierFromRegistration(credential.user, data, email);
-        } catch (profileError) {
-          state.registrationLock = false;
-          logAuthErrorCode(profileError);
-          if (auth.currentUser) {
-            state.needsCompanySetup = true;
-            showCompanySetup();
-          }
-          $('authError').textContent = authErrorMessage(profileError);
-          return;
-        }
-        state.needsCompanySetup = false;
-        state.registrationLock = false;
-        clearAuthIntent();
-        await loadSession(credential.user);
-      } else {
-        const { email, password } = readLoginCredentials();
-        try {
-          await signInWithEmailAndPassword(auth, email, password);
-        } catch (error) {
-          logAuthErrorCode(error);
-          $('authError').textContent = loginAuthErrorMessage(error);
-          return;
-        }
-        clearAuthIntent();
-      }
+      if (step === 'phone') await sendAuthOtp();
+      else if (step === 'otp') await verifyAuthOtp();
+      else if (step === 'details') await submitAuthDetails();
+      else await submitEmailLogin();
     } catch (error) {
       state.registrationLock = false;
       logAuthErrorCode(error);
-      $('authError').textContent = authErrorMessage(error);
+      $('authError').textContent = calmAuthError(error);
     } finally {
-      state.registrationLock = false;
       const cardVisible = $('authCard') && !$('authCard').classList.contains('hidden');
-      if (cardVisible) {
-        submitBtn.disabled = false;
-        if (String(submitBtn.textContent || '').startsWith('Ina')) submitBtn.textContent = previousLabel;
-      }
+      if (cardVisible) paintAuth();
     }
   };
   $('signOutBtn').onclick = () => {
