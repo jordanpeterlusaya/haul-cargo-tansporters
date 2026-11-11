@@ -326,6 +326,31 @@ function transporterShipment(item) {
   return Boolean(item) && !customerCancelled(item);
 }
 
+function companyAlreadyRejected(item) {
+  if (!item || !state.carrier?.id) return false;
+  if (item.carrierId && item.carrierId === state.carrier.id) return false;
+  const declined = Array.isArray(item.declinedCarrierIds) ? item.declinedCarrierIds : [];
+  return declined.map((id) => String(id || '')).includes(String(state.carrier.id));
+}
+
+function visibleDeskRow(item) {
+  return transporterShipment(item) && !companyAlreadyRejected(item);
+}
+
+function orderKey(item) {
+  return String(item?.orderId || item?.id || '');
+}
+
+function preferDeskRow(current, incoming) {
+  if (!current) return incoming;
+  if (!incoming) return current;
+  const owned = (item) => item.carrierId && item.carrierId === state.carrier?.id;
+  if (owned(incoming) && !owned(current)) return incoming;
+  if (owned(current) && !owned(incoming)) return current;
+  const stampOf = (item) => timeMs(item.offeredAt) || timeMs(item.updatedAt) || timeMs(item.createdAt);
+  return stampOf(incoming) >= stampOf(current) ? incoming : current;
+}
+
 function isBusParcel(order) {
   if (!order || customerCancelled(order) || order.status === 'cancelled') return false;
   if (norm(order.flow) !== 'parcel') return false;
@@ -1621,23 +1646,44 @@ function listen() {
   }
   const id = state.carrier.id;
   const buckets = { offered: [], owned: [] };
+  const dropHidden = (rows) => {
+    (rows || []).forEach((item) => {
+      if (!item?.id) return;
+      if (!customerCancelled(item) && !companyAlreadyRejected(item)) return;
+      delete state.pendingStages[item.id];
+      if (state.stageBusy === item.id) state.stageBusy = '';
+      if (state.deskOpen === item.id) state.deskOpen = '';
+    });
+  };
   const publishShipments = () => {
     const map = new Map();
     [...buckets.offered, ...buckets.owned].forEach((item) => {
-      if (!transporterShipment(item)) return;
-      map.set(item.id, item);
+      if (!visibleDeskRow(item)) return;
+      const key = orderKey(item);
+      map.set(key, preferDeskRow(map.get(key), item));
     });
     // Accept can change status before the owned query delivers the doc. Keep the open card.
     const prior = state.shipments || [];
     Object.keys(state.pendingStages || {}).forEach((id) => {
-      if (map.has(id)) return;
-      const prev = prior.find((item) => item.id === id);
+      const prev = prior.find((item) => item.id === id || orderKey(item) === id);
       const pending = state.pendingStages[id] || {};
-      if (prev && transporterShipment({ ...prev, ...pending })) map.set(id, { ...prev });
+      const merged = prev ? { ...prev, ...pending } : null;
+      if (!merged || !visibleDeskRow(merged)) {
+        delete state.pendingStages[id];
+        return;
+      }
+      const key = orderKey(merged);
+      if (map.has(key)) return;
+      map.set(key, merged);
     });
     state.shipments = [...map.values()].map((item) => {
       const pending = state.pendingStages[item.id];
       if (!pending) return item;
+      const merged = { ...item, ...pending };
+      if (!visibleDeskRow(merged)) {
+        delete state.pendingStages[item.id];
+        return null;
+      }
       const statusLanded = item.shipmentStatus === pending.shipmentStatus && String(item.trackStep || '') === String(pending.trackStep || '');
       const ownerLanded = !pending.carrierId || item.carrierId === pending.carrierId;
       if (statusLanded && ownerLanded) {
@@ -1645,26 +1691,30 @@ function listen() {
         delete state.stageBusyIds[item.id];
         return item;
       }
-      return { ...item, ...pending, stagePending: true };
-    }).filter(transporterShipment);
+      return { ...merged, stagePending: true };
+    }).filter(visibleDeskRow);
   };
   const watch = (q, apply, paint = true) => state.unsubscribers.push(onSnapshot(q, (snap) => {
     apply(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
     if (paint) scheduleRender();
   }));
   watch(query(collection(db, 'carrierShipments'), where('offeredCarrierId', '==', id)), (rows) => {
-    const live = rows.filter(transporterShipment);
-    const incoming = live.filter((item) => item.shipmentStatus === 'assigned' && !state.knownOfferIds?.has(item.id));
+    dropHidden(rows);
+    const live = rows.filter(visibleDeskRow);
+    const incoming = live.filter((item) => item.shipmentStatus === 'assigned' && !item.carrierId && !state.knownOfferIds?.has(item.id) && !state.knownOfferIds?.has(orderKey(item)));
     if (state.offersReady) {
       incoming.forEach((item) => announceIncomingOffer(item));
     }
-    state.knownOfferIds = new Set(live.filter((item) => item.shipmentStatus === 'assigned').map((item) => item.id));
+    state.knownOfferIds = new Set(
+      live.filter((item) => item.shipmentStatus === 'assigned' && !item.carrierId).flatMap((item) => [item.id, orderKey(item)])
+    );
     state.offersReady = true;
     buckets.offered = live;
     publishShipments();
   });
   watch(query(collection(db, 'carrierShipments'), where('carrierId', '==', id)), (rows) => {
-    buckets.owned = rows.filter(transporterShipment);
+    dropHidden(rows);
+    buckets.owned = rows.filter(visibleDeskRow);
     publishShipments();
   });
   watch(query(collection(db, 'carrierRoutes'), where('carrierId', '==', id)), (rows) => { state.routes = rows; });
@@ -2524,7 +2574,7 @@ function agentTookOrder(item) {
 }
 
 function orderBucket(item) {
-  if (customerCancelled(item)) return '';
+  if (!visibleDeskRow(item)) return '';
   const mineId = state.carrier?.id;
   const status = String(item.shipmentStatus || '');
   const step = String(item.trackStep || '');
@@ -2533,7 +2583,7 @@ function orderBucket(item) {
   if (status === 'delivered' || step === 'handed') return 'delivered';
   if (status === 'in_transit' || status === 'arrived' || step === 'transit' || step === 'arrived' || ['at_checkpoint', 'near_destination'].includes(item.journeyStatus)) return 'transit';
   if (item.carrierId === mineId || agentTookOrder(item)) return 'verified';
-  if (item.offeredCarrierId === mineId) return 'new';
+  if (item.offeredCarrierId === mineId && status === 'assigned') return 'new';
   return '';
 }
 
@@ -2756,9 +2806,9 @@ function rememberAcceptedOrder(id, extra = {}) {
 
 function showAcceptedOrder(id) {
   state.deskOpen = id;
-  const onDesk = location.hash.startsWith('#/orders') || location.hash.startsWith('#/assignment') || route().page === 'orders' || route().page === 'assignment';
-  if (onDesk && location.hash !== '#/orders/verified') {
-    location.hash = '#/orders/verified';
+  const page = route().page;
+  if (page !== 'orders') {
+    location.hash = '#/orders/new';
     return;
   }
   render();
@@ -3001,7 +3051,10 @@ function ordersDesk(tab) {
     state.deskTab = current;
     state.deskPage = 1;
     const kept = state.shipments.find((item) => item.id === keep);
-    const stayOpen = kept && (orderBucket(kept) === current || (orderBucket(kept) === 'verified' && (current === 'new' || current === 'verified')));
+    const stayOpen = Boolean(keep) && (
+      (kept && (orderBucket(kept) === current || (orderBucket(kept) === 'verified' && (current === 'new' || current === 'verified'))))
+      || Boolean(state.pendingStages[keep])
+    );
     state.deskOpen = stayOpen ? keep : '';
   }
   const query = String(state.deskQuery || '').trim().toLowerCase();
@@ -3399,22 +3452,23 @@ function orderBrief(item, opts = {}) {
   const receiver = item.recipientName || '—';
   const busy = state.stageBusy === item.id;
   const phonesOpen = contactsOpen(item);
-  const quoteOpts = { force: Boolean(opts.forceQuote) && !quoteAccepted(item) };
+  const quoteOpts = { force: Boolean(opts.forceQuote) && !quoteAccepted(item) && !owned };
   const board = moneyBoard(item, quoteOpts);
-  const quoting = board && typeof board === 'object' && board.quoting;
+  const quoting = !owned && board && typeof board === 'object' && board.quoting;
   const moneyBlock = quoting
     ? `<div class="money-board is-editing">${board.markup}</div>`
-    : board;
+    : (board && typeof board === 'object' ? `<div class="money-board is-confirmed">${board.markup}</div>` : board);
   const wait = unquotedWaitMarkup(item);
   const acceptNeeded = !owned && quoteAccepted(item);
   const stageCta = owned ? briefPrimaryAction(item) : '';
+  const postTools = owned ? `${mapsActionButton(item)}${whatsappShareBlock(item)}${stageCta}` : '';
   let actionsInner = '';
-  if (quoting) {
+  if (owned) {
+    actionsInner = postTools;
+  } else if (quoting) {
     actionsInner = `<button class="btn primary" type="submit">Tuma bei</button>`;
   } else if (acceptNeeded) {
     actionsInner = `<button class="btn primary" type="button" data-act="accept" data-id="${esc(item.id)}" ${busy ? 'disabled' : ''}>Accept</button>`;
-  } else if (owned) {
-    actionsInner = `${mapsActionButton(item)}${whatsappShareBlock(item)}${stageCta}`;
   }
   const actions = actionsInner
     ? `<div class="brief-actions ${owned && !quoting && !acceptNeeded ? 'is-post' : ''}">${actionsInner}</div>`
@@ -5470,6 +5524,7 @@ async function runMatching() {
     const order = { id: orderDoc.id, ...orderDoc.data() };
     if (!isBusParcel(order)) continue;
     const existing = shipments.get(order.id);
+    if (customerCancelled(order) || customerCancelled(existing)) continue;
     if (existing?.carrierId) continue;
     if (existing?.shipmentStatus === 'assigned' && existing.offeredCarrierId) continue;
     const declined = new Set(existing?.declinedCarrierIds || []);
