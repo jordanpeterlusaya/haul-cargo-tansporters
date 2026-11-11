@@ -857,10 +857,10 @@ function carrierVerifyBadge(status) {
 
 function carrierStatusHint(status) {
   const key = String(status || 'pending').toLowerCase();
-  if (key === 'verified') return 'Unaweza kupokea oda za mizigo kutoka HAUL.';
+  if (key === 'verified') return 'Unaweza kupokea oda za mizigo kutoka HAUL ukiwa mtandaoni kwenye desk.';
   if (key === 'rejected') return 'Wasiliana na HAUL au sasisha hati kwenye Mipangilio.';
   if (key === 'suspended') return 'Akaunti imesimamishwa. Wasiliana na HAUL.';
-  return 'Timu ya HAUL inapitia taarifa za kampuni yako.';
+  return 'Ukiwa mtandaoni kwenye desk, oda za mkoa wako zinafika hapa. SMS inaenda kwenye simu iliyothibitishwa tu.';
 }
 
 function badge(status) {
@@ -5414,14 +5414,21 @@ async function runMatching() {
   if (!state.isAdmin) throw new Error('Only the Haul desk can match orders.');
   const [ordersSnap, carriersSnap, routesSnap, vehiclesSnap, shipmentsSnap] = await Promise.all([
     getDocs(query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(40))),
-    getDocs(query(collection(db, 'carriers'), where('status', '==', 'verified'))),
+    getDocs(collection(db, 'carriers')),
     getDocs(query(collection(db, 'carrierRoutes'), where('active', '==', true))),
     getDocs(query(collection(db, 'carrierVehicles'), where('status', '==', 'active'))),
     getDocs(query(collection(db, 'carrierShipments'), limit(80))),
   ]);
   const shipmentRows = shipmentsSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const shipments = new Map(shipmentRows.map((item) => [item.id, item]));
-  const carriers = carriersSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const carriers = carriersSnap.docs
+    .map((item) => ({ id: item.id, ...item.data() }))
+    .filter((carrier) => {
+      const status = String(carrier.status || '').toLowerCase();
+      if (status !== 'verified' && status !== 'pending') return false;
+      if (carrier.offersPaused || carrier.fraudHold) return false;
+      return carrierIsOnline(carrier);
+    });
   const routesOf = (id) => routesSnap.docs.map((item) => ({ id: item.id, ...item.data() })).filter((item) => item.carrierId === id);
   const vehiclesOf = (id) => vehiclesSnap.docs.map((item) => item.data()).filter((item) => item.carrierId === id);
   let offered = 0;
@@ -5434,7 +5441,6 @@ async function runMatching() {
     const declined = new Set(existing?.declinedCarrierIds || []);
     if (existing?.shipmentStatus === 'assigned' && existing.offeredCarrierId) declined.add(existing.offeredCarrierId);
     const ranked = carriers
-      .filter((carrier) => carrierIsOnline(carrier))
       .map((carrier) => scoreCarrier(order, carrier, routesOf(carrier.id), vehiclesOf(carrier.id), {
         usedByRoute: heldWeightByRoute(shipmentRows, order.id),
       }))
@@ -5546,7 +5552,7 @@ async function uthibitishoPage() {
     .filter((item) => String(item.status || '').toLowerCase() === 'verified')
     .sort((a, b) => carrierReviewedMs(b) - carrierReviewedMs(a))
     .slice(0, 12);
-  return `<p class="page-lead">Thibitisha makampuni ya mabasi yaliyojiandikisha — ndiyo yanaweza kupokea oda za mizigo.</p>
+  return `<p class="page-lead">Thibitisha au kataa kampuni. Kampuni iliyo mtandaoni (pending au verified) inapokea oda ikiwa mkoa unafanana. Kukataa, kusimamisha, au deni linalozidi kikomo kunaondoa oda.</p>
     <section class="panel">
       <div class="section-head"><h2>Inasubiri uthibitisho</h2><span class="muted">${waiting.length}</span></div>
       ${waiting.length ? waiting.map((item) => uthibitishoRow(item, routesByCarrier)).join('') : '<p class="empty">Hakuna kampuni inayosubiri.</p>'}
