@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Manrope:wght@400;500;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20261111a" />
+  <link rel="stylesheet" href="./styles.css?v=20261111b" />
 </head>
 <body>
   <div id="public" class="site-public">
@@ -155,86 +155,48 @@
 
     <section class="auth-shell hidden" id="authCard">
       <div class="auth-panel">
-        <button class="auth-back" id="authBackHome" type="button">← Back to home</button>
-        <h2 id="authTitle">Login</h2>
-        <p class="auth-lead" id="authLead">Open your company dashboard.</p>
+        <button class="auth-back" id="authBackHome" type="button">Rudi nyumbani</button>
+        <p class="auth-kicker">HAUL</p>
+        <h2 id="authTitle">Ingia</h2>
+        <p class="auth-lead" id="authLead">Dashibodi ya kampuni yako.</p>
+        <div class="auth-modes" id="authModes" role="tablist" aria-label="Ingia au jisajili">
+          <button type="button" id="modeLogin" role="tab" aria-selected="true">Ingia</button>
+          <button type="button" id="modeRegister" role="tab" aria-selected="false">Jisajili</button>
+        </div>
         <form id="authForm" novalidate>
           <div id="registerFields" class="hidden">
-            <div class="reg-step" data-reg-step="1">
-              <label for="regCompanyName">Company name / Jina la kampuni</label>
-              <input id="regCompanyName" name="companyName" placeholder="e.g. Coastal Freight Ltd" autocomplete="organization" />
-              <div class="form-grid">
-                <div>
-                  <label for="regContactPerson">Contact person / Anayeawasiliana</label>
-                  <input id="regContactPerson" name="contactPerson" autocomplete="name" />
-                </div>
-                <div>
-                  <label for="regPhone">Company phone (order SMS) / Simu</label>
-                  <input id="regPhone" name="phone" placeholder="07…" inputmode="tel" autocomplete="tel" />
-                </div>
-              </div>
-              <label for="regLocation">Office location / Eneo la ofisi</label>
-              <input id="regLocation" name="location" placeholder="Kariakoo, Dar es Salaam" autocomplete="address-line1" />
-              <input type="hidden" name="businessDetails" value="" />
-            </div>
-
-            <div class="reg-step hidden" data-reg-step="2">
-              <p class="step-label">Base region &amp; operating coverage</p>
-              <label for="regRegion">Company base region / Mkoa wa makao</label>
-              <select id="regRegion" name="region">
-                <option value="">Select region…</option>
-              </select>
-              <fieldset class="coverage-box">
-                <legend>Operating regions / Maeneo ya kufanya kazi</legend>
-                <label class="check-row">
-                  <input type="checkbox" name="coverageAllTanzania" id="coverageAllTanzania" value="1" />
-                  <span>All Tanzania regions / Mikoa yote</span>
-                </label>
-                <p class="muted">If unchecked, select one or more regions below.</p>
-                <div class="region-grid" id="coverageRegionGrid"></div>
-              </fieldset>
-              <div class="reg-nav">
-                <button class="btn ghost reg-back" type="button" data-reg-back="1">Back</button>
-              </div>
-            </div>
-
-            <div class="reg-step hidden" data-reg-step="3">
-              <label for="regEmail">Business email / Barua pepe</label>
-              <input id="regEmail" name="regEmail" type="email" autocomplete="username" />
-              <label for="regPassword">Password / Nenosiri</label>
-              <div class="password-wrap">
-                <input id="regPassword" name="regPassword" type="password" autocomplete="new-password" minlength="6" data-password />
-                <button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button>
-              </div>
-              <label for="regPasswordConfirm">Confirm password / Thibitisha nenosiri</label>
-              <div class="password-wrap">
-                <input id="regPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="6" data-password />
-                <button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button>
-              </div>
-              <label class="check-row terms-row">
-                <input type="checkbox" name="termsAccepted" id="termsAccepted" value="1" />
-                <span>I accept the HAUL terms and conditions for transporter partners. / Ninakubali masharti ya HAUL.</span>
-              </label>
-              <div class="reg-nav">
-                <button class="btn ghost reg-back" type="button" data-reg-back="2">Back</button>
-              </div>
+            <label for="regCompanyName">Jina la kampuni</label>
+            <input id="regCompanyName" name="companyName" autocomplete="organization" />
+            <label for="regPhone">Simu ya kampuni</label>
+            <input id="regPhone" name="phone" placeholder="07XXXXXXXX" inputmode="tel" autocomplete="tel" />
+            <label for="regRegion">Mkoa wa makao</label>
+            <select id="regRegion" name="region">
+              <option value="">Chagua mkoa</option>
+            </select>
+          </div>
+          <div id="registerCredentials" class="hidden">
+            <label for="regEmail">Barua pepe ya biashara</label>
+            <input id="regEmail" name="regEmail" type="email" autocomplete="username" inputmode="email" />
+            <label for="regPassword">Nenosiri</label>
+            <div class="password-wrap">
+              <input id="regPassword" name="regPassword" type="password" autocomplete="new-password" data-password />
+              <button class="password-toggle" type="button" data-toggle-password aria-label="Onyesha nenosiri">Onyesha</button>
             </div>
           </div>
-
           <div id="loginFields">
-            <label for="loginEmail">Business email / Barua pepe</label>
-            <input id="loginEmail" name="email" type="email" autocomplete="username" />
-            <label for="loginPassword">Password / Nenosiri</label>
+            <label for="loginEmail">Barua pepe</label>
+            <input id="loginEmail" name="email" type="email" autocomplete="username" inputmode="email" />
+            <label for="loginPassword">Nenosiri</label>
             <div class="password-wrap">
-              <input id="loginPassword" name="password" type="password" autocomplete="current-password" minlength="6" data-password />
-              <button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button>
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" data-password />
+              <button class="password-toggle" type="button" data-toggle-password aria-label="Onyesha nenosiri">Onyesha</button>
             </div>
-            <button class="btn link" id="forgotPassword" type="button">Forgot password? / Umesahau nenosiri?</button>
+            <button class="btn link" id="forgotPassword" type="button">Umesahau nenosiri?</button>
           </div>
           <p class="form-success hidden" id="authSuccess"></p>
           <p class="form-error" id="authError" role="alert"></p>
-          <button class="btn primary" type="submit" id="authSubmit">Login</button>
-          <button class="btn ghost" type="button" id="authSwitch">Need an account?</button>
+          <button class="btn primary" type="submit" id="authSubmit">Ingia</button>
+          <p class="auth-fine" id="authFine"></p>
         </form>
       </div>
     </section>
@@ -284,6 +246,6 @@
       <button type="button" class="photo-lightbox-x" data-lightbox-close aria-label="Funga">×</button>
     </figure>
   </div>
-  <script type="module" src="./app.js?v=20261111a"></script>
+  <script type="module" src="./app.js?v=20261111b"></script>
 </body>
 </html>
