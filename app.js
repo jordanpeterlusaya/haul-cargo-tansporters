@@ -1872,11 +1872,35 @@ function listen() {
   const watch = (q, apply, paint = true) => state.unsubscribers.push(onSnapshot(q, (snap) => {
     apply(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
     if (paint) scheduleRender();
+  }, (error) => {
+    console.warn('portal listener failed', error?.code || error?.message || error);
+  }));
+  state.unsubscribers.push(onSnapshot(doc(db, 'carriers', id), (snap) => {
+    if (!snap.exists()) return;
+    const next = { id: snap.id, ...snap.data() };
+    const prevStatus = String(state.carrier?.status || '').toLowerCase();
+    state.carrier = next;
+    const nextStatus = String(next.status || '').toLowerCase();
+    if (prevStatus !== 'verified' && nextStatus === 'verified') {
+      console.info('portal carrier approved', { carrierId: id });
+      pulsePortalPresence();
+      scheduleRender();
+    }
+  }, (error) => {
+    console.warn('portal carrier listener failed', error?.code || error?.message || error);
   }));
   watch(query(collection(db, 'carrierShipments'), where('offeredCarrierId', '==', id)), (rows) => {
     dropHidden(rows);
     const live = rows.filter(visibleDeskRow);
     const incoming = live.filter((item) => item.shipmentStatus === 'assigned' && !item.carrierId && !state.knownOfferIds?.has(item.id) && !state.knownOfferIds?.has(orderKey(item)));
+    if (!state.offersReady || incoming.length) {
+      console.info('portal offer snapshot', {
+        carrierId: id,
+        rows: rows.length,
+        open: live.filter((item) => item.shipmentStatus === 'assigned' && !item.carrierId).length,
+        incoming: incoming.length,
+      });
+    }
     if (state.offersReady) {
       incoming.forEach((item) => announceIncomingOffer(item));
     }
@@ -5700,7 +5724,7 @@ async function runMatching() {
     .map((item) => ({ id: item.id, ...item.data() }))
     .filter((carrier) => {
       const status = String(carrier.status || '').toLowerCase();
-      if (status !== 'verified' && status !== 'pending') return false;
+      if (status !== 'verified') return false;
       if (carrier.offersPaused || carrier.fraudHold) return false;
       return carrierIsOnline(carrier);
     });
