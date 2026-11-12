@@ -34,6 +34,20 @@ import {
   updateDoc,
   where,
 } from 'https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js';
+import {
+  DESK_STEPS,
+  JOURNEY_PROGRESS,
+  commissionTzs,
+  companyRejected,
+  customerCancelled as shipmentCustomerCancelled,
+  deskStage,
+  forwardHaulStage,
+  nextAction as deskNextAction,
+  progressAllowed,
+  reviewShowsContact,
+  shippingFeeTzs,
+  transitionAllowed,
+} from './order-flow.mjs?v=20261112b';
 
 const ADMIN_EMAIL = 'boyzeus11@gmail.com';
 const HAUL_FEE_RATE = 0.12;
@@ -192,6 +206,7 @@ const state = {
   payBusy: false,
   payOpening: false,
   editingDriverId: '',
+  deskNotice: null,
 };
 
 let countdownTimer = null;
@@ -346,23 +361,10 @@ function feeSplit(amount) {
   return { amount: Number(amount) || 0, haulFee, carrierNet: (Number(amount) || 0) - haulFee };
 }
 function quoteCommission(amount) {
-  const fee = Math.round(Number(amount) || 0);
-  if (fee <= 0) return 0;
-  return Math.round(fee * QUOTE_COMMISSION_RATE);
+  return commissionTzs(amount);
 }
-const NON_CUSTOMER_CANCEL = new Set(['dispatch', 'driver', 'company', 'carrier', 'agent', 'transporter']);
-
 function customerCancelled(item) {
-  if (!item) return false;
-  const by = String(item.cancelledBy || item.canceledBy || '').trim().toLowerCase();
-  const status = String(item.shipmentStatus || item.status || '').trim().toLowerCase();
-  const stage = String(item.haulStage || '').trim().toLowerCase();
-  const quote = String(item.quoteStatus || '').trim().toLowerCase();
-  if (by === 'customer') return true;
-  if (stage === 'cancelled' || stage === 'canceled') return true;
-  if (quote === 'declined') return true;
-  if (status === 'cancelled' || status === 'canceled') return !NON_CUSTOMER_CANCEL.has(by);
-  return false;
+  return shipmentCustomerCancelled(item);
 }
 
 function transporterShipment(item) {
@@ -370,10 +372,7 @@ function transporterShipment(item) {
 }
 
 function companyAlreadyRejected(item) {
-  if (!item || !state.carrier?.id) return false;
-  if (item.carrierId && item.carrierId === state.carrier.id) return false;
-  const declined = Array.isArray(item.declinedCarrierIds) ? item.declinedCarrierIds : [];
-  return declined.map((id) => String(id || '')).includes(String(state.carrier.id));
+  return companyRejected(item, state.carrier?.id);
 }
 
 function visibleDeskRow(item) {
@@ -665,26 +664,7 @@ function cashOf(order) {
   return Math.round(Number(order.customerOffer || 0));
 }
 function shippingFeeOf(item) {
-  // Agent shipping quote only. declaredValueTzs is goods value and must never fill this.
-  const declared = declaredValueOf(item);
-  const status = String(item?.quoteStatus || '').trim();
-  const explicit = Math.round(Number(item?.carrierQuoteTzs || item?.shippingFeeTzs) || 0);
-  const agentQuoted = status === 'offered' || status === 'confirmed' || item?.customerAcceptedQuote === true || Boolean(item?.quotedAt);
-  if (agentQuoted) {
-    if (explicit > 0) return explicit;
-    const cash = Math.round(Number(item?.cashExpected) || 0);
-    return cash > 0 ? cash : 0;
-  }
-  if (status === 'awaiting_company') return 0;
-  if (explicit > 0 && explicit !== declared) return explicit;
-  const cash = Math.round(Number(item?.cashExpected) || 0);
-  if (cash > 0 && cash !== declared) return cash;
-  const source = `${item?.totalLabel || ''} ${item?.fareLabel || ''}`.replace(/,/g, '');
-  if (/baada|awaiting|kampuni|quote/i.test(source)) return 0;
-  const match = source.match(/(\d+(?:\.\d+)?)/);
-  if (!match) return 0;
-  const parsed = Math.round(Number(match[1]));
-  return parsed > 0 && parsed !== declared ? parsed : 0;
+  return shippingFeeTzs(item);
 }
 function priceOf(item) {
   return shippingFeeOf(item);
@@ -2762,7 +2742,7 @@ function ordersTable(rows, showAccept) {
 }
 
 const ORDER_TABS = [
-  ['new', 'New order'],
+  ['new', 'New orders'],
   ['verified', 'Verified'],
   ['transit', 'In transit'],
   ['delivered', 'Delivered'],
@@ -2786,16 +2766,7 @@ function agentTookOrder(item) {
 
 function orderBucket(item) {
   if (!visibleDeskRow(item)) return '';
-  const mineId = state.carrier?.id;
-  const status = String(item.shipmentStatus || '');
-  const step = String(item.trackStep || '');
-  if (!mineId || !offeredOrOwned(item)) return '';
-  if (status === 'cancelled') return 'cancelled';
-  if (status === 'delivered' || step === 'handed') return 'delivered';
-  if (status === 'in_transit' || status === 'arrived' || step === 'transit' || step === 'arrived' || ['at_checkpoint', 'near_destination'].includes(item.journeyStatus)) return 'transit';
-  if (item.carrierId === mineId || agentTookOrder(item)) return 'verified';
-  if (item.offeredCarrierId === mineId && status === 'assigned') return 'new';
-  return '';
+  return deskStage(item, state.carrier?.id);
 }
 
 function quotePending(item) {
@@ -2884,7 +2855,7 @@ function agentOwns(item) {
 }
 
 function contactsOpen(item) {
-  return agentOwns(item);
+  return reviewShowsContact(item, state.carrier?.id);
 }
 
 function pickupCoords(item) {
@@ -2965,7 +2936,7 @@ function partyPatchFromSource(item, source) {
 }
 
 async function ensureAcceptedParty(item) {
-  if (!item?.id || !agentTookOrder(item) || !partyMissing(item)) return item;
+  if (!item?.id || !reviewShowsContact(item, state.carrier?.id) || !partyMissing(item)) return item;
   if (partyEnrichPending[item.id]) return item;
   partyEnrichPending[item.id] = true;
   try {
@@ -2999,27 +2970,39 @@ async function ensureAcceptedParty(item) {
   return item;
 }
 
+function rememberStage(id, patch, tab) {
+  state.pendingStages[id] = { ...(state.pendingStages[id] || {}), ...patch };
+  const row = state.shipments.find((item) => item.id === id);
+  if (row) Object.assign(row, state.pendingStages[id]);
+  state.deskOpen = id;
+  if (tab) {
+    const target = `#/orders/${tab}`;
+    if (location.hash !== target) {
+      location.hash = target;
+      return row;
+    }
+  }
+  return row;
+}
+
 function rememberAcceptedOrder(id, extra = {}) {
-  const optimistic = {
+  return rememberStage(id, {
     carrierId: state.carrier?.id,
     shipmentStatus: 'accepted',
     trackStep: 'received',
     portalStage: 'accepted',
+    haulStage: 'verified',
+    carrierMatchStatus: 'accepted',
     agentAcceptedAt: new Date().toISOString(),
     ...extra,
-  };
-  state.pendingStages[id] = { ...(state.pendingStages[id] || {}), ...optimistic };
-  const row = state.shipments.find((item) => item.id === id);
-  if (row) Object.assign(row, state.pendingStages[id]);
-  state.deskOpen = id;
-  return row;
+  }, 'verified');
 }
 
 function showAcceptedOrder(id) {
   state.deskOpen = id;
-  const page = route().page;
-  if (page !== 'orders') {
-    location.hash = '#/orders/new';
+  const target = '#/orders/verified';
+  if (location.hash !== target) {
+    location.hash = target;
     return;
   }
   render();
@@ -3119,18 +3102,7 @@ function quotePanel(item, opts = {}) {
 }
 
 function briefPrimaryAction(item) {
-  if (!contactsOpen(item)) return '';
-  const bucket = orderBucket(item);
-  if (!bucket || bucket === 'cancelled' || bucket === 'delivered') return '';
-  const id = esc(item.id);
-  const busy = state.stageBusy === item.id;
-  if (bucket === 'transit') {
-    return `<button class="btn primary" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>Delivered</button>`;
-  }
-  if (bucket === 'verified') {
-    return `<button class="btn primary verify-btn" type="button" data-act="verify" data-id="${id}" ${busy ? 'disabled' : ''}>Verify</button>`;
-  }
-  return '';
+  return stageButtons(item);
 }
 
 function stageStamp(item, key) {
@@ -3139,7 +3111,7 @@ function stageStamp(item, key) {
     return hit?.at || '';
   };
   if (key === 'new') return item.offeredAt || item.createdAt || historyAt(['assigned']);
-  if (key === 'verified') return item.acceptedAt || historyAt(['accepted', 'received']);
+  if (key === 'verified') return item.acceptedAt || item.agentAcceptedAt || historyAt(['accepted', 'received']);
   if (key === 'transit') return item.inTransitAt || historyAt(['in_transit', 'transit']);
   if (key === 'delivered') return item.deliveredAt || historyAt(['handed', 'delivered']);
   return '';
@@ -3164,20 +3136,7 @@ function stageTracker(item) {
 }
 
 function stageAction(item) {
-  if (!contactsOpen(item)) return '';
-  const bucket = orderBucket(item);
-  if (!bucket || bucket === 'cancelled') return '';
-  const id = esc(item.id);
-  const busy = state.stageBusy === item.id;
-  const tracker = stageTracker(item);
-  if (bucket === 'delivered') return tracker;
-  if (bucket === 'transit') {
-    return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('delivered')} Delivered</button></div>`;
-  }
-  if (bucket === 'verified') {
-    return `${tracker}<div class="stage-action"><button class="btn primary" type="button" data-act="verify" data-id="${id}" ${busy ? 'disabled' : ''}>${stageIcon('verified')} Verify</button></div>`;
-  }
-  return tracker;
+  return `${flowProgress(item)}${stageButtons(item)}`;
 }
 
 function stageButton(item) {
@@ -3263,25 +3222,22 @@ function ordersDesk(tab) {
     state.deskPage = 1;
     const kept = state.shipments.find((item) => item.id === keep);
     const stayOpen = Boolean(keep) && (
-      (kept && (orderBucket(kept) === current || (orderBucket(kept) === 'verified' && (current === 'new' || current === 'verified'))))
-      || Boolean(state.pendingStages[keep])
+      (kept && orderBucket(kept) === current) || Boolean(state.pendingStages[keep])
     );
     state.deskOpen = stayOpen ? keep : '';
   }
   const query = String(state.deskQuery || '').trim().toLowerCase();
   const fromMs = state.deskFrom ? Date.parse(`${state.deskFrom}T00:00:00`) : 0;
   const toMs = state.deskTo ? Date.parse(`${state.deskTo}T23:59:59`) : 0;
-  const keepAccepted = (item) => state.deskOpen === item.id && orderBucket(item) === 'verified' && (current === 'new' || current === 'verified');
-  let rows = state.shipments.filter((item) => orderBucket(item) === current || keepAccepted(item));
+  let rows = state.shipments.filter((item) => orderBucket(item) === current);
   if (query) {
-    rows = rows.filter((item) => keepAccepted(item) || [
-      item.orderNumber, item.id, item.customerName, item.customerPhone, item.recipientName,
+    rows = rows.filter((item) => [
+      item.orderNumber, item.id, item.parcelCode, item.customerName, item.customerPhone, item.recipientName,
       item.pickupLabel, item.origin, item.destination, item.dropoffLabel, item.parcelDescription,
     ].join(' ').toLowerCase().includes(query));
   }
   if (fromMs || toMs) {
     rows = rows.filter((item) => {
-      if (keepAccepted(item)) return true;
       const ms = orderClock(item);
       if (!ms) return false;
       if (fromMs && ms < fromMs) return false;
@@ -3310,17 +3266,23 @@ function ordersDesk(tab) {
     const count = state.shipments.filter((item) => orderBucket(item) === key).length;
     return `<a class="order-tab ${key === current ? 'on' : ''}" href="#/orders/${key}"><span>${label}</span><em>${count}</em></a>`;
   }).join('');
-  const briefOpts = { forceQuote: current === 'new' || current === 'verified' };
+  const note = state.deskNotice
+    ? `<p class="desk-note ${state.deskNotice.tone === 'ok' ? 'ok' : 'err'}" role="status">${esc(state.deskNotice.text)}</p>`
+    : '';
   const body = !slice.length
-    ? `<p class="empty">${query || fromMs || toMs ? 'Hakuna oda inayolingana na utafutaji.' : 'Hakuna oda katika hatua hii.'}</p>`
-    : `<div class="order-stack">${slice.map((item) => arriveCard(item, briefOpts)).join('')}</div>${orderPager(rows.length, page, pages)}`;
-  return `<div class="order-desk mute-desk">
+    ? `<p class="empty">${query || fromMs || toMs ? 'No orders match this search.' : 'No orders in this stage.'}</p>`
+    : `<div class="table-wrap desk-table"><table class="ops-table">
+        <thead><tr><th>Order</th><th>Route</th><th>Status</th><th>Shipping fee</th><th></th></tr></thead>
+        <tbody>${slice.map((item) => deskLine(item)).join('')}</tbody>
+      </table></div>${orderPager(rows.length, page, pages)}`;
+  return `<div class="order-desk">
     <div class="desk-tools">
       <input id="deskSearch" type="search" placeholder="Search order, customer, phone, route" value="${esc(state.deskQuery || '')}" />
       <label>From <input id="deskFrom" type="date" value="${esc(state.deskFrom || '')}" /></label>
       <label>To <input id="deskTo" type="date" value="${esc(state.deskTo || '')}" /></label>
     </div>
     <div class="order-tabs" role="tablist">${tabs}</div>
+    ${note}
     ${body}
   </div>`;
 }
@@ -3481,22 +3443,8 @@ async function mirrorCustomerOrder(shipmentId, shipment, extras = {}) {
 }
 
 function forwardCustomerStage(order, shipment) {
-  const rank = { new: 0, verified: 1, in_transit: 2, delivered: 3 };
-  const fromFacts = (input) => {
-    const status = String(input?.shipmentStatus || input?.status || '').toLowerCase();
-    const step = String(input?.trackStep || input?.carrierTrackStep || '').toLowerCase();
-    const named = String(input?.haulStage || '').toLowerCase();
-    if (step === 'handed' || status === 'delivered' || named === 'delivered') return 'delivered';
-    if (step === 'transit' || step === 'arrived' || status === 'in_transit' || status === 'arrived' || named === 'in_transit') return 'in_transit';
-    if (named === 'verified' || input?.carrierId || ['accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus'].includes(status) || ['received', 'pickup', 'packed'].includes(step) || String(input?.carrierMatchStatus || '') === 'accepted') return 'verified';
-    return 'new';
-  };
-  const currentName = fromFacts(order);
-  const incomingName = fromFacts(shipment);
-  const haulStage = (rank[incomingName] ?? 0) >= (rank[currentName] ?? 0) ? incomingName : currentName;
-  const version = Math.max(0, Math.round(Number(order?.statusVersion) || 0));
-  const trackStep = haulStage === 'delivered' ? 'handed' : haulStage === 'in_transit' ? (String(shipment?.trackStep || '') === 'arrived' ? 'arrived' : 'transit') : haulStage === 'verified' ? 'received' : '';
-  return { haulStage, statusVersion: haulStage !== currentName || version === 0 ? version + 1 : version, trackStep };
+  const stage = forwardHaulStage(order, shipment);
+  return { haulStage: stage.haulStage, statusVersion: stage.statusVersion, trackStep: stage.trackStep };
 }
 
 function availableOrdersPage() {
@@ -3651,92 +3599,162 @@ function orderPager(count, page, pages) {
   </div>`;
 }
 
+function contactPhone(phone, open) {
+  const raw = String(phone || '').trim();
+  if (!raw) return '—';
+  if (!open) return esc(maskedPhone(raw));
+  return phoneLine(raw);
+}
+
+function requirementBlock(item) {
+  const bits = [
+    ['Size', item.outsideParcelSize],
+    ['Mode', item.outsideShippingMode],
+    ['Handoff', item.outsideHandoffMode],
+    ['Drop-off', item.recipientAddress || item.dropoffLabel],
+    ['Distance', item.distanceLabel],
+    ['Notes', item.deliveryNote || item.deliveryNotes || item.customerNotes || item.handlingNotes || item.notes],
+  ].filter(([, value]) => String(value || '').trim());
+  if (!bits.length) return '<p class="muted">No extra requirements on this order.</p>';
+  return `<dl class="review-dl">${bits.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;
+}
+
+function flowProgress(item) {
+  const bucket = orderBucket(item);
+  if (!bucket || bucket === 'cancelled') return '';
+  const index = Math.max(0, DESK_STEPS.findIndex((step) => step.key === bucket));
+  return `<ol class="flow-steps" aria-label="Order progress">${DESK_STEPS.map((step, stepIndex) => {
+    const tone = stepIndex < index ? 'done' : stepIndex === index ? 'now' : '';
+    const at = stageStamp(item, step.key);
+    const known = at && when(at) !== '—';
+    return `<li class="${tone}"><span>${esc(step.label)}</span>${known && stepIndex <= index ? `<time>${esc(when(at))}</time>` : ''}</li>`;
+  }).join('')}</ol>`;
+}
+
+function progressForm(item) {
+  const id = esc(item.id);
+  const busy = state.stageBusy === item.id;
+  const current = JOURNEY_PROGRESS.includes(item.journeyStatus) ? item.journeyStatus : 'in_transit';
+  const labels = { in_transit: 'In transit', at_checkpoint: 'At checkpoint', near_destination: 'Near destination' };
+  const options = JOURNEY_PROGRESS.map((key) => `<option value="${key}" ${key === current ? 'selected' : ''}>${labels[key]}</option>`).join('');
+  return `<form class="progress-form" data-progress="${id}">
+    <label>Progress <select name="journeyStatus" ${busy ? 'disabled' : ''}>${options}</select></label>
+    <label>Place <input name="place" placeholder="Town or checkpoint" ${busy ? 'disabled' : ''} /></label>
+    <label>Note <input name="note" placeholder="Optional update" maxlength="280" ${busy ? 'disabled' : ''} /></label>
+    <button class="btn line" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : 'Update progress'}</button>
+  </form>`;
+}
+
+function stageButtons(item) {
+  const action = deskNextAction(item, state.carrier?.id);
+  const id = esc(item.id);
+  const busy = state.stageBusy === item.id;
+  const saving = busy ? 'Saving…' : '';
+  if (action === 'accept') {
+    return `<div class="review-actions"><button class="btn next" type="button" data-act="accept" data-id="${id}" ${busy ? 'disabled' : ''}>${saving || 'Accept order'}</button></div>`;
+  }
+  if (action === 'wait') return '<p class="desk-note">Waiting for the customer to accept the shipping price.</p>';
+  if (action === 'transit') {
+    return `<div class="review-actions"><button class="btn next" type="button" data-act="start-transit" data-id="${id}" ${busy ? 'disabled' : ''}>${saving || 'Start transit'}</button></div>`;
+  }
+  if (action === 'deliver') {
+    return `${progressForm(item)}<div class="review-actions"><button class="btn next" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>${saving || 'Mark delivered'}</button></div>`;
+  }
+  if (orderBucket(item) === 'delivered') {
+    const at = item.deliveredAt;
+    return `<p class="desk-note ok">Delivered${at && when(at) !== '—' ? ` · ${esc(when(at))}` : ''}.</p>`;
+  }
+  return '';
+}
+
+function rowAction(item) {
+  if (state.deskOpen === item.id) return '';
+  const action = deskNextAction(item, state.carrier?.id);
+  const id = esc(item.id);
+  const busy = state.stageBusy === item.id;
+  if (action === 'transit') {
+    return `<button class="btn next small" type="button" data-act="start-transit" data-id="${id}" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : 'Start transit'}</button>`;
+  }
+  if (action === 'deliver') {
+    return `<button class="btn next small" type="button" data-act="deliver" data-id="${id}" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : 'Mark delivered'}</button>`;
+  }
+  return '';
+}
+
+function deskLine(item) {
+  const open = state.deskOpen === item.id;
+  const from = shortPlace(item.pickupLabel || item.origin);
+  const to = shortPlace(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  const fee = priceOf(item);
+  return `<tr class="${open ? 'is-open' : ''}">
+      <td><strong class="order-id">#${esc(shipmentCode(item))}</strong><div class="cell-sub">${esc(when(item.offeredAt || item.acceptedAt || item.createdAt))}</div></td>
+      <td>${esc(from)} <span class="route-arrow">→</span> ${esc(to)}</td>
+      <td>${stageBadge(item)}</td>
+      <td>${fee > 0 ? money(fee) : '—'}</td>
+      <td class="actions">
+        <button class="btn line small" type="button" data-desk="open" data-id="${esc(item.id)}" aria-expanded="${open ? 'true' : 'false'}">${open ? 'Close' : 'Review'}</button>
+        ${rowAction(item)}
+      </td>
+    </tr>
+    ${open ? `<tr class="review-row"><td colspan="5">${orderBrief(item)}</td></tr>` : ''}`;
+}
+
 function orderBrief(item, opts = {}) {
   const owned = agentOwns(item);
   void ensureCargoPhotos(item);
-  if (owned) void ensureAcceptedParty(item);
-  const from = shortPlace(item.origin || item.pickupLabel);
-  const to = shortPlace(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
+  if (reviewShowsContact(item, state.carrier?.id)) void ensureAcceptedParty(item);
   const fromFull = placeName(item.origin || item.pickupLabel);
   const toFull = placeName(item.destination || item.outsideDestinationLabel || item.dropoffLabel);
   const sender = item.senderName || item.customerName || '—';
   const receiver = item.recipientName || '—';
-  const busy = state.stageBusy === item.id;
-  const phonesOpen = contactsOpen(item);
-  const quoteOpts = { force: Boolean(opts.forceQuote) && !quoteAccepted(item) && !owned };
-  const board = moneyBoard(item, quoteOpts);
-  const quoting = !owned && board && typeof board === 'object' && board.quoting;
+  const phonesOpen = reviewShowsContact(item, state.carrier?.id);
+  const action = deskNextAction(item, state.carrier?.id);
+  const board = moneyBoard(item, { force: action === 'quote' });
+  const quoting = action === 'quote' && board && typeof board === 'object' && board.quoting;
   const moneyBlock = quoting
     ? `<div class="money-board is-editing">${board.markup}</div>`
-    : (board && typeof board === 'object' ? `<div class="money-board is-confirmed">${board.markup}</div>` : board);
-  const wait = unquotedWaitMarkup(item);
-  const acceptNeeded = !owned && quoteAccepted(item);
-  const stageCta = owned ? briefPrimaryAction(item) : '';
-  const postTools = owned ? `${mapsActionButton(item)}${whatsappShareBlock(item)}${stageCta}` : '';
-  let actionsInner = '';
-  if (owned) {
-    actionsInner = postTools;
-  } else if (quoting) {
-    actionsInner = `<button class="btn primary" type="submit">Tuma bei</button>`;
-  } else if (acceptNeeded) {
-    actionsInner = `<button class="btn primary" type="button" data-act="accept" data-id="${esc(item.id)}" ${busy ? 'disabled' : ''}>Accept</button>`;
-  }
-  const actions = actionsInner
-    ? `<div class="brief-actions ${owned && !quoting && !acceptNeeded ? 'is-post' : ''}">${actionsInner}</div>`
-    : '';
-  const body = `
-    <header class="brief-head">
-      <h3 class="brief-code">#${esc(shipmentCode(item))}</h3>
-      ${glanceBadge(item)}
+    : (board && typeof board === 'object' ? `<div class="money-board">${board.markup}</div>` : board);
+  const price = quoting
+    ? `<form class="quote-form brief-quote" data-quote="${esc(item.id)}">${moneyBlock}<div class="review-actions"><button class="btn next" type="submit" ${state.stageBusy === item.id ? 'disabled' : ''}>Send shipping price</button></div></form>`
+    : `${unquotedWaitMarkup(item)}${moneyBlock}`;
+  const tools = owned ? `<div class="review-tools">${mapsActionButton(item)}${whatsappShareBlock(item)}</div>` : '';
+  return `<article class="order-brief review">
+    <header class="review-head">
+      <h3>#${esc(shipmentCode(item))}</h3>
+      ${stageBadge(item)}
     </header>
-    <section class="route-visual" aria-label="Njia">
-      <div class="route-stop">
-        <span class="pin origin">${uiIcon('pin')}</span>
-        <span class="stop-label">Inatoka</span>
-        <strong title="${esc(fromFull)}">${esc(from)}</strong>
-      </div>
-      <div class="route-track" aria-hidden="true"><span></span><i>${uiIcon('truck')}</i><span></span></div>
-      <div class="route-stop">
-        <span class="pin dest">${uiIcon('pin')}</span>
-        <span class="stop-label">Inaenda</span>
-        <strong title="${esc(toFull)}">${esc(to)}</strong>
-      </div>
-    </section>
-    <section class="brief-block" aria-label="Watu">
-      <h4 class="brief-title">Watu</h4>
-      <div class="party-list">
-        <div class="party">
-          ${personAvatar(sender, 'sender')}
-          <div class="party-copy">
-            <span class="party-label">Mtumaji</span>
-            <strong>${esc(sender)}</strong>
-            ${phoneVisual(item.senderPhone || item.customerPhone, phonesOpen)}
-          </div>
-        </div>
-        <div class="party">
-          ${personAvatar(receiver, 'receiver')}
-          <div class="party-copy">
-            <span class="party-label">Mpokeaji</span>
-            <strong>${esc(receiver)}</strong>
-            ${phoneVisual(item.recipientPhone, phonesOpen)}
-          </div>
-        </div>
-      </div>
-    </section>
-    <section class="brief-block" aria-label="Mzigo">
-      <h4 class="brief-title">Mzigo</h4>
+    ${flowProgress(item)}
+    <dl class="review-dl">
+      <div><dt>Pickup</dt><dd>${esc(fromFull)}</dd></div>
+      <div><dt>Destination</dt><dd>${esc(toFull)}</dd></div>
+    </dl>
+    <details>
+      <summary>Cargo</summary>
+      <p class="muted">${esc(item.weightKg || 0)} kg${item.parcelDescription ? ` · ${esc(item.parcelDescription)}` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</p>
       ${photoStrip(item)}
-    </section>
-    <section class="brief-block" aria-label="Pesa">
-      <h4 class="brief-title">Pesa${wait ? ` ${wait}` : ''}</h4>
-      ${moneyBlock}
-    </section>
-    ${actions}
-    ${opts.full && owned ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}" aria-label="Receipt">${uiIcon('box')} Receipt</a></div>` : ''}`;
-  if (quoting) {
-    return `<article class="order-brief"><form class="quote-form brief-quote" data-quote="${esc(item.id)}">${body}</form></article>`;
-  }
-  return `<article class="order-brief">${body}</article>`;
+    </details>
+    <details open>
+      <summary>Customer contact</summary>
+      <dl class="review-dl">
+        <div><dt>Sender</dt><dd>${esc(sender)}</dd></div>
+        <div><dt>Sender phone</dt><dd>${contactPhone(item.senderPhone || item.customerPhone, phonesOpen)}</dd></div>
+        <div><dt>Receiver</dt><dd>${esc(receiver)}</dd></div>
+        <div><dt>Receiver phone</dt><dd>${contactPhone(item.recipientPhone, phonesOpen)}</dd></div>
+      </dl>
+    </details>
+    <details>
+      <summary>Delivery requirements</summary>
+      ${requirementBlock(item)}
+    </details>
+    <details open>
+      <summary>Price</summary>
+      <p class="muted">Shipping fee is the company quote. Thamani is cargo value, not the fee. Commission is 15% and is not editable.</p>
+      ${price}
+    </details>
+    ${stageButtons(item)}
+    ${tools}
+    ${opts.full && owned ? `<div class="actions"><a class="btn line small" href="#/sticker/${esc(item.id)}">Receipt</a></div>` : ''}
+  </article>`;
 }
 
 function whatsappHref(phone, text) {
@@ -4256,12 +4274,12 @@ function stickerPage(id) {
         <section>
           <span>Kutoka</span>
           <strong>${esc(item.customerName || '—')}</strong>
-          <p>${contactsOpen(item) ? esc(item.customerPhone || '—') : `${uiIcon('lock')} ${esc(maskedPhone(item.customerPhone))}`}</p>
+          <p>${agentOwns(item) ? esc(item.customerPhone || '—') : `${uiIcon('lock')} ${esc(maskedPhone(item.customerPhone))}`}</p>
         </section>
         <section>
           <span>Kwenda</span>
           <strong>${esc(item.recipientName || '—')}</strong>
-          <p>${contactsOpen(item) ? esc(item.recipientPhone || '—') : `${uiIcon('lock')} ${esc(maskedPhone(item.recipientPhone))}`}</p>
+          <p>${agentOwns(item) ? esc(item.recipientPhone || '—') : `${uiIcon('lock')} ${esc(maskedPhone(item.recipientPhone))}`}</p>
         </section>
       </div>
       <div class="sticker-meta sticker-meta-4">
@@ -6137,6 +6155,217 @@ async function requireCarrier() {
   return state.carrier.id;
 }
 
+function stageSnapshot(current) {
+  return {
+    carrierId: current.carrierId || null,
+    shipmentStatus: current.shipmentStatus || '',
+    trackStep: current.trackStep || '',
+    portalStage: current.portalStage || '',
+    haulStage: current.haulStage || '',
+    journeyStatus: current.journeyStatus || '',
+    agentAcceptedAt: current.agentAcceptedAt || null,
+  };
+}
+
+function apiMiss(error) {
+  const message = String(error?.message || '');
+  return /404|not found|Cannot POST|Failed to fetch|NetworkError|Failed to make request/i.test(message);
+}
+
+async function writeStageFallback(id, current, patch, act) {
+  const ref = doc(db, 'carrierShipments', id);
+  if (act === 'accept') {
+    const fee = shippingFeeOf({ id, ...current });
+    const rate = QUOTE_COMMISSION_RATE;
+    const haulFee = quoteCommission(fee);
+    const label = fee > 0 ? `TZS ${fee.toLocaleString('en-US')}` : String(current.fareLabel || '').trim();
+    const extras = {};
+    try {
+      const orderId = String(current.orderId || id).trim();
+      const orderSnap = await getDoc(doc(db, 'orders', orderId));
+      if (orderSnap.exists()) Object.assign(extras, partyPatchFromSource({ id, ...current }, orderSnap.data() || {}));
+    } catch {
+      /* optional enrich */
+    }
+    await updateDoc(ref, {
+      ...patch,
+      pickupStatus: 'assigned',
+      acceptedAt: serverTimestamp(),
+      agentAcceptedAt: serverTimestamp(),
+      manifestDate: darTodayKey(),
+      cashExpected: fee,
+      haulFee,
+      haulFeeRate: fee > 0 ? haulFee / fee : rate,
+      carrierNet: Math.max(0, fee - haulFee),
+      commissionCountedAt: serverTimestamp(),
+      ...(fee > 0 ? {
+        fareLabel: label,
+        quoteStatus: quoteAccepted({ id, ...current }) ? 'confirmed' : 'offered',
+        carrierQuoteTzs: fee,
+        shippingFeeTzs: fee,
+        ...(quoteAccepted({ id, ...current }) ? { customerAcceptedQuote: true } : {}),
+      } : {}),
+      statusHistory: arrayUnion({ status: 'accepted', label: 'Accepted', at: stamp(), actor: state.user?.email || '' }),
+      ...extras,
+    });
+    await updateDoc(doc(db, 'carriers', state.carrier.id), { accepted: increment(1) });
+    return { party: extras };
+  }
+  const delivered = act === 'deliver';
+  await updateDoc(ref, {
+    ...patch,
+    ...(delivered ? { deliveredAt: serverTimestamp() } : { inTransitAt: serverTimestamp() }),
+    statusHistory: arrayUnion({
+      status: delivered ? 'delivered' : 'in_transit',
+      label: delivered ? 'Delivered' : 'In transit',
+      at: stamp(),
+      actor: state.user?.email || '',
+    }),
+    updatedAt: serverTimestamp(),
+  });
+  if (delivered) await updateDoc(doc(db, 'carriers', state.carrier.id), { deliveries: increment(1) });
+  return {};
+}
+
+async function runOrderTransition(act, id, current) {
+  const carrierId = state.carrier?.id;
+  if (!carrierId) throw new Error('No company on this login.');
+  if (act === 'verify') act = 'start-transit';
+  const live = { id, ...current, ...(state.pendingStages[id] || {}) };
+  if (state.stageBusy === id || state.stageBusyIds[id]) return;
+  if (act === 'accept' && !window.confirm('Accept this order? Your company takes responsibility for this delivery.')) return;
+  if (act === 'deliver' && !window.confirm('Mark this order as delivered? The customer will see Delivered.')) return;
+
+  if (act === 'progress') {
+    const gate = progressAllowed(live, carrierId);
+    if (!gate.ok) {
+      state.deskNotice = { id, tone: 'err', text: gate.reason };
+      state.deskOpen = id;
+      render();
+      return;
+    }
+    const form = document.querySelector(`form[data-progress="${id}"]`);
+    const status = String(form?.querySelector('[name="journeyStatus"]')?.value || '');
+    const place = String(form?.querySelector('[name="place"]')?.value || '').trim();
+    const note = String(form?.querySelector('[name="note"]')?.value || '').trim();
+    if (!JOURNEY_PROGRESS.includes(status)) {
+      state.deskNotice = { id, tone: 'err', text: 'Choose a valid in-transit progress status.' };
+      render();
+      return;
+    }
+    if (!place) {
+      state.deskNotice = { id, tone: 'err', text: 'Add the place for this progress update.' };
+      render();
+      return;
+    }
+    state.stageBusy = id;
+    state.stageBusyIds[id] = true;
+    state.deskOpen = id;
+    try {
+      await portalCall('/carrier/portal/journey', {
+        shipmentId: id,
+        status,
+        message: note,
+        locationName: place,
+        locationSource: 'manual',
+      });
+      const latest = { status, message: note, locationName: place, locationSource: 'manual', at: stamp() };
+      const row = state.shipments.find((item) => item.id === id);
+      if (row) Object.assign(row, { journeyStatus: status, latestJourney: latest, trackStep: row.trackStep || 'transit' });
+      state.deskNotice = { id, tone: 'ok', text: 'Progress saved.' };
+      showToast('Progress saved.');
+    } catch (error) {
+      state.deskNotice = { id, tone: 'err', text: swahiliError(error?.message) };
+    } finally {
+      state.stageBusy = '';
+      delete state.stageBusyIds[id];
+      render();
+    }
+    return;
+  }
+
+  const gate = transitionAllowed(live, carrierId, act === 'start-transit' ? 'transit' : act);
+  if (!gate.ok) {
+    state.deskNotice = { id, tone: gate.already ? 'ok' : 'err', text: gate.reason };
+    state.deskOpen = id;
+    render();
+    return;
+  }
+
+  const previous = stageSnapshot(live);
+  state.stageBusy = id;
+  state.stageBusyIds[id] = true;
+  const tab = act === 'accept' ? 'verified' : act === 'deliver' ? 'delivered' : 'transit';
+  const shown = { ...gate.patch };
+  const nowIso = new Date().toISOString();
+  if (act === 'accept') shown.acceptedAt = shown.acceptedAt || nowIso;
+  if (act === 'start-transit') shown.inTransitAt = nowIso;
+  if (act === 'deliver') shown.deliveredAt = nowIso;
+  rememberStage(id, shown, tab);
+  const path = act === 'accept'
+    ? '/carrier/portal/accept'
+    : act === 'deliver'
+      ? '/carrier/portal/deliver'
+      : '/carrier/portal/transit';
+  const body = { shipmentId: id };
+  if (act === 'accept') {
+    const fee = shippingFeeOf(live);
+    if (fee >= 1000) {
+      body.amountTzs = fee;
+      body.commissionTzs = quoteCommission(fee);
+    }
+  }
+  if (act === 'deliver') body.locationName = 'Delivered';
+  try {
+    let payload = {};
+    try {
+      payload = await portalCall(path, body);
+    } catch (error) {
+      const message = String(error?.message || '');
+      if (/already/i.test(message)) payload = { already: true };
+      else if (apiMiss(error)) payload = await writeStageFallback(id, live, gate.patch, act);
+      else throw error;
+    }
+    await mirrorCustomerOrder(id, {
+      ...live,
+      ...gate.patch,
+      carrierId: act === 'accept' ? carrierId : (live.carrierId || carrierId),
+    });
+    if (act === 'accept' && payload?.party && typeof payload.party === 'object') {
+      const row = state.shipments.find((item) => item.id === id) || live;
+      const party = partyPatchFromSource(row, payload.party);
+      const lat = Number(payload.party.pickupLatitude ?? payload.party.pickupLat);
+      const lng = Number(payload.party.pickupLongitude ?? payload.party.pickupLng);
+      if (Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+        party.pickupLatitude = lat;
+        party.pickupLongitude = lng;
+      }
+      if (Object.keys(party).length) {
+        applyPartyPatch(row, party);
+        rememberStage(id, { ...gate.patch, ...party }, tab);
+      }
+      void ensureAcceptedParty(state.shipments.find((item) => item.id === id) || row);
+    }
+    const success = act === 'accept'
+      ? 'Order accepted. It is verified and waiting for dispatch.'
+      : act === 'deliver'
+        ? 'Marked delivered.'
+        : 'Marked in transit.';
+    state.deskNotice = { id, tone: 'ok', text: success };
+    showToast(success);
+  } catch (error) {
+    delete state.pendingStages[id];
+    const row = state.shipments.find((item) => item.id === id);
+    if (row) Object.assign(row, previous);
+    state.deskNotice = { id, tone: 'err', text: swahiliError(error?.message) };
+    if (act === 'accept' && location.hash === '#/orders/verified') location.hash = '#/orders/new';
+  } finally {
+    state.stageBusy = '';
+    delete state.stageBusyIds[id];
+    render();
+  }
+}
+
 async function onViewClick(event) {
   if (await handleDebtPayClick(event)) return;
   const photoBtn = event.target.closest('[data-photo]');
@@ -6277,8 +6506,12 @@ async function onViewClick(event) {
     window.alert('Mteja amefuta oda hii.');
     return;
   }
-  if (quotePending({ id, ...current }) && ['set-status', 'verify', 'accept', 'start-transit', 'deliver', 'journey', 'track', 'pickup'].includes(act)) {
+  if (quotePending({ id, ...current }) && ['set-status', 'journey', 'track', 'pickup'].includes(act)) {
     window.alert('Mteja bado hajaukubali bei ya usafirishaji.');
+    return;
+  }
+  if (act === 'accept' || act === 'start-transit' || act === 'deliver' || act === 'verify') {
+    await runOrderTransition(act, id, current, ref);
     return;
   }
   if (act === 'set-status') {
@@ -6297,221 +6530,6 @@ async function onViewClick(event) {
     if (step === 'handed') patch.deliveredAt = serverTimestamp();
     await updateDoc(ref, patch);
     await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id }, { message: label });
-    return;
-  }
-  if (act === 'verify') {
-    if (current.carrierId !== state.carrier?.id) {
-      window.alert('Kubali oda kwanza.');
-      return;
-    }
-    state.stageBusy = id;
-    actBtn.disabled = true;
-    try {
-      await portalCall('/carrier/portal/verify', { shipmentId: id });
-    } catch {
-      // Older API only stamps verified. The local write still sets in transit.
-    }
-    const patch = {
-      shipmentStatus: 'in_transit',
-      trackStep: 'transit',
-      journeyStatus: 'in_transit',
-      portalStage: 'in_transit',
-      transporterVerifiedAt: serverTimestamp(),
-      inTransitAt: serverTimestamp(),
-      statusHistory: arrayUnion({ status: 'transit', label: 'In transit', at: stamp(), actor: state.user?.email || '' }),
-    };
-    await updateDoc(ref, patch);
-    await mirrorCustomerOrder(id, { ...current, ...patch, carrierId: state.carrier.id }, { message: 'In transit' });
-    const row = state.shipments.find((item) => item.id === id);
-    state.pendingStages[id] = {
-      ...(state.pendingStages[id] || {}),
-      carrierId: state.carrier.id,
-      shipmentStatus: 'in_transit',
-      trackStep: 'transit',
-      journeyStatus: 'in_transit',
-    };
-    if (row) Object.assign(row, state.pendingStages[id]);
-    state.deskOpen = id;
-    if (location.hash.startsWith('#/orders') && !location.hash.startsWith('#/orders/transit')) location.hash = '#/orders/transit';
-    return;
-  }
-  if (act === 'verify' || act === 'accept' || act === 'start-transit' || act === 'tracking-link' || act === 'deliver') {
-    if ((act === 'accept' || act === 'start-transit' || act === 'deliver') && state.stageBusy) return;
-    if (act === 'deliver' && !window.confirm('Mark this order as delivered? The customer will see Delivered.')) return;
-    if (act === 'accept' || act === 'start-transit' || act === 'deliver') {
-      state.stageBusy = id;
-      actBtn.disabled = true;
-    }
-    const path = {
-      verify: '/carrier/portal/verify',
-      accept: '/carrier/portal/accept',
-      'start-transit': '/carrier/portal/transit',
-      'tracking-link': '/carrier/portal/tracking-link',
-      deliver: '/carrier/portal/deliver',
-    }[act];
-    const body = { shipmentId: id, locationName: act === 'deliver' ? 'Delivered' : undefined };
-    if (act === 'accept') {
-      const form = document.querySelector(`form[data-quote="${id}"]`);
-      const typed = Math.round(Number(String(form?.amount?.value || '').replace(/[^\d]/g, '')));
-      const quoted = shippingFeeOf({ id, ...current });
-      const amount = typed >= 1000 ? typed : quoted;
-      if (amount >= 1000) {
-        body.amountTzs = amount;
-        body.commissionTzs = quoteCommission(amount);
-      }
-      const needsPrice = String(current.quoteStatus || '') === 'awaiting_company' || !(Number(current.cashExpected) > 0 || amount >= 1000);
-      if (needsPrice && !(amount >= 1000)) {
-        state.stageBusy = '';
-        window.alert('Weka bei ya usafirishaji kabla ya kuchukua oda.');
-        form?.amount?.focus();
-        return;
-      }
-      const previousAccept = {
-        carrierId: current.carrierId || null,
-        shipmentStatus: current.shipmentStatus || 'assigned',
-        trackStep: current.trackStep || '',
-        portalStage: current.portalStage || '',
-        agentAcceptedAt: current.agentAcceptedAt || null,
-      };
-      rememberAcceptedOrder(id);
-      showAcceptedOrder(id);
-      try {
-        const payload = await portalCall(path, body);
-        await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, shipmentStatus: 'accepted', trackStep: 'received' });
-        const live = { id, ...current, ...(state.pendingStages[id] || {}) };
-        const party = payload?.party && typeof payload.party === 'object' ? partyPatchFromSource(live, payload.party) : {};
-        // Accept party may be the first place pickup coords appear — force them onto the desk row.
-        if (payload?.party && typeof payload.party === 'object') {
-          const lat = Number(payload.party.pickupLatitude ?? payload.party.pickupLat);
-          const lng = Number(payload.party.pickupLongitude ?? payload.party.pickupLng);
-          if (Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
-            party.pickupLatitude = lat;
-            party.pickupLongitude = lng;
-          }
-          if (payload.party.pickupLabel && !String(party.pickupLabel || live.pickupLabel || '').trim()) {
-            party.pickupLabel = String(payload.party.pickupLabel).trim();
-          }
-        }
-        const row = rememberAcceptedOrder(id, party);
-        if (row) {
-          if (Object.keys(party).length) applyPartyPatch(row, party);
-          void ensureAcceptedParty(row);
-        }
-        showAcceptedOrder(id);
-        const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
-        if (note) window.alert(note);
-        return;
-      } catch (error) {
-        const message = String(error?.message || '');
-        if (!/404|not found|Cannot POST|Failed to fetch|NetworkError|Failed to make request/i.test(message)) {
-          if (!/already accepted/i.test(message)) {
-            delete state.pendingStages[id];
-            const row = state.shipments.find((item) => item.id === id);
-            if (row) Object.assign(row, previousAccept);
-            state.deskOpen = id;
-            if (location.hash === '#/orders/verified') location.hash = '#/orders/new';
-          } else {
-            showAcceptedOrder(id);
-          }
-          throw error;
-        }
-        // Local accept fallback: lock edited price + commission when company takes the order.
-        const fee = amount >= 1000 ? amount : shippingFeeOf({ id, ...current });
-        const rate = QUOTE_COMMISSION_RATE;
-        const haulFee = quoteCommission(fee);
-        const label = fee > 0 ? `TZS ${fee.toLocaleString('en-US')}` : String(current.fareLabel || '').trim();
-        const orderId = String(current.orderId || id).trim();
-        const extras = {};
-        try {
-          const orderSnap = await getDoc(doc(db, 'orders', orderId));
-          if (orderSnap.exists()) {
-            const order = orderSnap.data() || {};
-            const photos = Array.isArray(order.parcelPhotoUrls)
-              ? order.parcelPhotoUrls.map((url) => String(url || '').trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 6)
-              : [];
-            if (photos.length && !cargoPhotoList(current).length) extras.parcelPhotoUrls = photos;
-            const senderPhone = String(order.senderPhone || order.customerPhone || order.phoneNumber || '').trim();
-            const senderName = String(order.senderName || order.customerName || '').trim();
-            const recipientName = String(order.recipientName || order.receiverName || '').trim();
-            const recipientPhone = String(order.recipientPhone || order.receiverPhone || '').trim();
-            if (senderPhone && !String(current.senderPhone || current.customerPhone || '').trim()) {
-              extras.senderPhone = senderPhone;
-              extras.customerPhone = senderPhone;
-            }
-            if (senderName && !String(current.senderName || current.customerName || '').trim()) {
-              extras.senderName = senderName;
-              extras.customerName = senderName;
-            }
-            if (recipientName && !String(current.recipientName || '').trim()) extras.recipientName = recipientName;
-            if (recipientPhone && !String(current.recipientPhone || '').trim()) extras.recipientPhone = recipientPhone;
-            const lat = Number(order.pickupLatitude ?? order.pickupLat);
-            const lng = Number(order.pickupLongitude ?? order.pickupLng);
-            if (!hasPickupCoords(current) && Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
-              extras.pickupLatitude = lat;
-              extras.pickupLongitude = lng;
-            }
-            const meters = Number(order.distanceMeters);
-            if ((!current.distanceMeters || Number(current.distanceMeters) <= 0) && Number.isFinite(meters) && meters > 0) {
-              extras.distanceMeters = Math.round(meters);
-              extras.distanceKm = Math.round((meters / 1000) * 10) / 10;
-              extras.distanceLabel = String(order.distanceLabel || '').trim() || `${extras.distanceKm} km`;
-            }
-          }
-        } catch {
-          // optional enrich
-        }
-        const acceptPatch = {
-          carrierId: state.carrier.id,
-          shipmentStatus: 'accepted',
-          trackStep: 'received',
-          pickupStatus: 'assigned',
-          acceptedAt: serverTimestamp(),
-          agentAcceptedAt: serverTimestamp(),
-          manifestDate: darTodayKey(),
-          cashExpected: fee,
-          haulFee,
-          haulFeeRate: fee > 0 ? haulFee / fee : rate,
-          carrierNet: Math.max(0, fee - haulFee),
-          commissionCountedAt: serverTimestamp(),
-          ...(fee > 0 ? { fareLabel: label, quoteStatus: quoteAccepted({ id, ...current }) ? 'confirmed' : 'offered', carrierQuoteTzs: fee, shippingFeeTzs: fee, ...(quoteAccepted({ id, ...current }) ? { customerAcceptedQuote: true, agentAcceptedAt: serverTimestamp() } : {}) } : {}),
-          statusHistory: arrayUnion({ status: 'received', label: 'Imepokelewa', at: stamp(), actor: state.user.email }),
-          ...extras,
-        };
-        await updateDoc(ref, acceptPatch);
-        if (orderId && fee > 0 && !quoteAccepted({ id, ...current }) && (needsPrice || String(current.quoteStatus || '') === 'awaiting_company')) {
-          await setDoc(doc(db, 'orders', orderId), {
-            quoteStatus: 'offered',
-            carrierQuoteTzs: fee,
-            shippingFeeTzs: fee,
-            fareLabel: label,
-            totalLabel: label,
-            carrierQuoteAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          }, { merge: true });
-        }
-        await updateDoc(doc(db, 'carriers', state.carrier.id), { accepted: increment(1) });
-        await mirrorCustomerOrder(id, { ...current, ...acceptPatch });
-        const party = {};
-        ['senderName', 'senderPhone', 'customerName', 'customerPhone', 'recipientName', 'recipientPhone', 'pickupLatitude', 'pickupLongitude', 'parcelPhotoUrls'].forEach((key) => {
-          if (extras[key] != null && extras[key] !== '') party[key] = extras[key];
-        });
-        const row = rememberAcceptedOrder(id, { ...party, quoteStatus: acceptPatch.quoteStatus || current.quoteStatus });
-        if (row) void ensureAcceptedParty(row);
-        showAcceptedOrder(id);
-        return;
-      }
-    }
-    const payload = await portalCall(path, body);
-    const stageByAct = {
-      accept: { shipmentStatus: 'accepted', trackStep: 'received' },
-      'start-transit': { shipmentStatus: 'in_transit', trackStep: 'transit' },
-      deliver: { shipmentStatus: 'delivered', trackStep: 'handed' },
-    };
-    if (stageByAct[act]) {
-      await mirrorCustomerOrder(id, { ...current, carrierId: state.carrier.id, ...stageByAct[act] });
-    }
-    const note = payload.whatsapp?.error || (payload.whatsapp?.status === 'sent' ? 'WhatsApp sent.' : '');
-    if (note) window.alert(note);
     return;
   }
   if (act === 'journey') {
@@ -6677,6 +6695,14 @@ async function onViewSubmit(event) {
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) return;
   event.preventDefault();
+  if (form.matches('[data-progress]')) {
+    const id = form.dataset.progress;
+    const ref = doc(db, 'carrierShipments', id);
+    const snap = await getDoc(ref);
+    if (!snap.exists() || !mine({ id, ...snap.data() })) return;
+    await runOrderTransition('progress', id, snap.data());
+    return;
+  }
   const data = new FormData(form);
   if (form.id === 'dailyTripForm') {
     const carrierId = await requireCarrier();
@@ -7133,6 +7159,9 @@ function bindAuth() {
       window.alert('Weka bei halali kwa TZS.');
       return;
     }
+    const submit = form.querySelector('[type="submit"]');
+    if (submit?.disabled) return;
+    if (submit) submit.disabled = true;
     sendCompanyQuote(shipmentId, amount)
       .then(() => {
         delete state.quoteDraftAmount[shipmentId];
@@ -7141,6 +7170,7 @@ function bindAuth() {
         window.alert('Bei imetumwa kwa mteja.');
       })
       .catch((error) => {
+        if (submit) submit.disabled = false;
         window.alert(error.message || 'Bei haikuweza kutumwa.');
       });
   });
