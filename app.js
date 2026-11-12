@@ -52,7 +52,7 @@ import {
 const ADMIN_EMAIL = 'boyzeus11@gmail.com';
 const HAUL_FEE_RATE = 0.12;
 const QUOTE_COMMISSION_RATE = 0.15;
-const OFFER_MS = 5 * 60 * 1000;
+const OFFER_MS = 75 * 1000;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const FLOW = ['new', 'matching', 'assigned', 'accepted', 'contacted', 'pickup_scheduled', 'picked_up', 'at_bus', 'in_transit', 'arrived', 'delivered'];
 const NEXT_STATUS = {
@@ -5793,7 +5793,7 @@ async function runMatching() {
       arrivalTime: deleteField(),
       pickupMode: deleteField(),
       trackStep: deleteField(),
-      offerExpiresAt: null,
+      offerExpiresAt: new Date(Date.now() + OFFER_MS),
       offeredAt: serverTimestamp(),
       declinedCarrierIds: [...declined],
       capacityReserved: true,
@@ -6841,7 +6841,8 @@ async function onViewSubmit(event) {
       offeredCarrierId: carrierId,
       offerScore: 100,
       routeLabel: 'Manual assignment',
-      offerExpiresAt: null,
+      offerExpiresAt: new Date(Date.now() + OFFER_MS),
+      offeredAt: serverTimestamp(),
       statusHistory: arrayUnion({ status: 'assigned', at: stamp(), actor: 'haul-manual' }),
       updatedAt: serverTimestamp(),
     }, { merge: true });
