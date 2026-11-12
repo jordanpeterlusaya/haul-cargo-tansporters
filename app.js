@@ -1143,7 +1143,10 @@ function authErrorMessage(error) {
     case 'auth/web-storage-unsupported':
       return 'Kivinjari hiki hakiwezi kuhifadhi kipindi. Jaribu kivinjari kingine.';
     case 'auth/internal-error':
-      return 'Kuna tatizo la seva. Jaribu tena.';
+    case 'auth/insufficient-permission':
+    case 'auth/invalid-custom-token':
+    case 'auth/custom-token-mismatch':
+      return 'Imeshindwa kufungua kipindi. Jaribu tena.';
     case 'permission-denied':
       return 'Ruhusa imekataliwa. Wasifu wa kampuni haujahifadhiwa. Jaribu tena.';
     case 'unavailable':
@@ -1154,10 +1157,14 @@ function authErrorMessage(error) {
       break;
   }
   const msg = String(error?.message || '').trim();
-  if (msg && !/firebase/i.test(msg) && !/^auth\//.test(msg) && !code.startsWith('auth/')) {
-    return msg;
-  }
-  return 'Kuna tatizo. Jaribu tena.';
+  const usable = msg
+    && msg.length <= 180
+    && !/firebase/i.test(msg)
+    && !/^auth\//.test(msg)
+    && !/https?:\/\//i.test(msg)
+    && !/signBlob|troubleshooter|iam\.serviceAccounts/i.test(msg);
+  if (usable) return msg;
+  return 'Imeshindwa. Jaribu tena.';
 }
 
 function resetAuthErrorMessage(error) {
@@ -1193,6 +1200,7 @@ const SERVER_AUTH_ERRORS = {
   invalid_email: 'Weka barua pepe sahihi.',
   sms_send_failed: 'Imeshindwa kutuma msimbo. Jaribu tena.',
   sms_not_configured: 'Huduma ya SMS haipatikani. Jaribu tena baadaye.',
+  token_sign_failed: 'Imeshindwa kufungua kipindi. Jaribu tena.',
   ticket_expired: 'Uthibitisho umeisha muda. Anza upya.',
   no_session: 'Omba msimbo mpya kwanza.',
   bad_ticket: 'Uthibitisho wa simu hauko sahihi. Anza upya.',
@@ -1461,9 +1469,11 @@ async function verifyAuthOtp() {
     $('authError').textContent = 'Weka namba ya simu kwanza.';
     return;
   }
-  const result = await postCarrierAuth('/carrier-auth/otp/verify', { phone: state.otpPhone, code });
-  state.otpTicket = String(result.otpTicket || '');
-  if (!state.otpTicket) throw new Error('Thibitisho halijakamilika. Jaribu tena.');
+  if (!state.otpTicket) {
+    const result = await postCarrierAuth('/carrier-auth/otp/verify', { phone: state.otpPhone, code });
+    state.otpTicket = String(result.otpTicket || '');
+    if (!state.otpTicket) throw new Error('Thibitisho halijakamilika. Jaribu tena.');
+  }
   if (state.mode === 'register' || state.needsCompanySetup) {
     state.authStep = 'details';
     paintAuth();
