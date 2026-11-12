@@ -1,7 +1,11 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js';
 import {
   browserLocalPersistence,
+  browserPopupRedirectResolver,
+  browserSessionPersistence,
   getAuth,
+  indexedDBLocalPersistence,
+  initializeAuth,
   onAuthStateChanged,
   sendPasswordResetEmail,
   setPersistence,
@@ -103,7 +107,44 @@ const app = initializeApp({
   messagingSenderId: firebaseOverrides.messagingSenderId || '729242246964',
   appId: firebaseOverrides.appId || '1:729242246964:web:bdb35a59a681a4a7420f61',
 });
-const auth = getAuth(app);
+
+const REMEMBER_KEY = 'haulAuthRemember';
+const LAST_EMAIL_KEY = 'haulAuthEmail';
+
+function readRememberPreference() {
+  try {
+    const value = localStorage.getItem(REMEMBER_KEY);
+    if (value == null || value === '') return true;
+    return value === '1';
+  } catch {
+    return true;
+  }
+}
+
+function writeRememberPreference(remember) {
+  try {
+    localStorage.setItem(REMEMBER_KEY, remember ? '1' : '0');
+  } catch {
+    /* preference only — never a password */
+  }
+}
+
+function createPortalAuth(firebaseApp) {
+  const persistence = readRememberPreference()
+    ? [indexedDBLocalPersistence, browserLocalPersistence]
+    : browserSessionPersistence;
+  try {
+    return initializeAuth(firebaseApp, {
+      persistence,
+      popupRedirectResolver: browserPopupRedirectResolver,
+    });
+  } catch (error) {
+    if (String(error?.code || '') === 'auth/already-initialized') return getAuth(firebaseApp);
+    throw error;
+  }
+}
+
+const auth = createPortalAuth(app);
 const db = getFirestore(app);
 
 const state = {
@@ -127,6 +168,8 @@ const state = {
   otpCooldown: 0,
   needsCompanySetup: false,
   registrationLock: false,
+  rememberMe: readRememberPreference(),
+  otpBypass: false,
   unsubscribers: [],
   editingQuoteId: null,
   quoteDraftAmount: {},
@@ -1010,12 +1053,10 @@ const LANDING_SECTIONS = new Set(['how', 'features', 'start', '']);
 
 function scrubLoggedOutHash() {
   if (state.user) return;
-  if (authModeFromHash()) return;
   const raw = location.hash.replace(/^#\/?/, '').trim();
   const page = raw.split('/')[0];
-  if (!raw || LANDING_SECTIONS.has(page)) return;
-  if (page === 'login' || page === 'register') return;
-  location.replace('#/');
+  if (!raw || LANDING_SECTIONS.has(page) || page === 'login' || page === 'register') return;
+  location.replace('#/login');
 }
 
 function scrollToLandingSection(id) {
@@ -1119,6 +1160,10 @@ function authErrorMessage(error) {
       return 'Tovuti hii haijaidhinishwa kwa usajili. Jaribu tena baadaye.';
     case 'auth/operation-not-allowed':
       return 'Usajili wa barua pepe haujawashwa. Wasiliana na msaada wa HAUL.';
+    case 'auth/web-storage-unsupported':
+      return 'Kivinjari hiki hakiwezi kuhifadhi kipindi. Jaribu kivinjari kingine.';
+    case 'auth/internal-error':
+      return 'Kuna tatizo la seva. Jaribu tena.';
     case 'permission-denied':
       return 'Ruhusa imekataliwa. Wasifu wa kampuni haujahifadhiwa. Jaribu tena.';
     case 'unavailable':
@@ -1134,6 +1179,46 @@ function authErrorMessage(error) {
   }
   return 'Kuna tatizo. Jaribu tena.';
 }
+
+function resetAuthErrorMessage(error) {
+  const code = String(error?.code || '');
+  switch (code) {
+    case 'auth/invalid-email':
+    case 'auth/missing-email':
+      return 'Weka barua pepe sahihi ya biashara.';
+    case 'auth/user-not-found':
+      return 'Hakuna akaunti kwa barua pepe hii.';
+    case 'auth/too-many-requests':
+      return 'Umejaribu mara nyingi. Subiri kidogo kisha jaribu tena.';
+    case 'auth/network-request-failed':
+      return 'Tatizo la mtandao. Angalia muunganisho wako.';
+    case 'auth/unauthorized-domain':
+      return 'Tovuti hii haijaidhinishwa. Jaribu tena baadaye.';
+    default:
+      return 'Hatukuweza kutuma barua ya nenosiri. Jaribu tena.';
+  }
+}
+
+const SERVER_AUTH_ERRORS = {
+  phone_taken: 'Simu hii tayari imesajiliwa. Ingia.',
+  email_taken: 'Barua pepe hii tayari imesajiliwa. Ingia.',
+  no_account: 'Hakuna akaunti kwa simu hii. Jisajili kwanza.',
+  invalid_code: 'Msimbo si sahihi.',
+  expired: 'Msimbo umeisha muda. Omba mpya.',
+  cooldown: 'Subiri kidogo kabla ya kutuma tena.',
+  rate_limit: 'Umefikia kikomo cha SMS. Jaribu baadaye.',
+  too_many_attempts: 'Umejaribu mara nyingi. Omba msimbo mpya.',
+  invalid_phone: 'Weka namba sahihi, mfano 07XXXXXXXX.',
+  weak_password: 'Nenosiri liwe angalau herufi 6.',
+  invalid_email: 'Weka barua pepe sahihi.',
+  sms_send_failed: 'Imeshindwa kutuma msimbo. Jaribu tena.',
+  sms_not_configured: 'Huduma ya SMS haipatikani. Jaribu tena baadaye.',
+  ticket_expired: 'Uthibitisho umeisha muda. Anza upya.',
+  no_session: 'Omba msimbo mpya kwanza.',
+  bad_ticket: 'Uthibitisho wa simu hauko sahihi. Anza upya.',
+  not_verified: 'Thibitisha simu kwanza.',
+  auth_create_failed: 'Imeshindwa kufungua akaunti. Jaribu tena.',
+};
 
 function readLoginCredentials() {
   return {
@@ -1183,14 +1268,84 @@ function startOtpCooldown(seconds) {
 
 function calmAuthError(error) {
   const code = String(error?.code || '');
+  const message = String(error?.message || '').trim();
+  const mapped = SERVER_AUTH_ERRORS[code];
+  if (mapped && (!message || /firebase|unauthorized|unexpected|missing auth|auth\/|error/i.test(message))) {
+    return mapped;
+  }
   if (code.startsWith('auth/') || ['permission-denied', 'unavailable', 'failed-precondition'].includes(code)) {
     return authErrorMessage(error);
   }
-  const message = String(error?.message || '').trim();
+  if (mapped && message) return message;
   if (!message || /firebase/i.test(message) || /^auth\//.test(message) || message.length > 180) {
-    return 'Imeshindwa. Jaribu tena.';
+    return mapped || 'Imeshindwa. Jaribu tena.';
   }
   return message;
+}
+
+function readLastEmail() {
+  try {
+    const email = String(localStorage.getItem(LAST_EMAIL_KEY) || '').trim().toLowerCase();
+    return validBusinessEmail(email) ? email : '';
+  } catch {
+    return '';
+  }
+}
+
+function writeLastEmail(email) {
+  const value = String(email || '').trim().toLowerCase();
+  if (!validBusinessEmail(value)) return;
+  try {
+    localStorage.setItem(LAST_EMAIL_KEY, value);
+  } catch {
+    /* email only — never a password */
+  }
+}
+
+function restoreLastEmail() {
+  const email = readLastEmail();
+  if (!email) return;
+  const login = $('loginEmail');
+  if (login && !login.value) login.value = email;
+  const reg = $('regEmail');
+  if (reg && !reg.value) reg.value = email;
+}
+
+function rememberMeChecked() {
+  const box = $('rememberMe');
+  if (box) return Boolean(box.checked);
+  return state.rememberMe !== false;
+}
+
+async function applyPersistenceMode(remember) {
+  if (remember) {
+    try {
+      await setPersistence(auth, indexedDBLocalPersistence);
+    } catch {
+      await setPersistence(auth, browserLocalPersistence);
+    }
+    return;
+  }
+  await setPersistence(auth, browserSessionPersistence);
+}
+
+async function signInWithRemember(remember, signIn) {
+  const previous = readRememberPreference();
+  writeRememberPreference(Boolean(remember));
+  state.rememberMe = Boolean(remember);
+  try {
+    await applyPersistenceMode(Boolean(remember));
+    await signIn();
+  } catch (error) {
+    writeRememberPreference(previous);
+    state.rememberMe = rememberMeChecked();
+    try {
+      await applyPersistenceMode(previous);
+    } catch {
+      /* keep the sign-in error */
+    }
+    throw error;
+  }
 }
 
 async function postCarrierAuth(path, body, token) {
@@ -1245,7 +1400,9 @@ function paintAuth() {
     },
     otp: {
       title: 'Weka msimbo',
-      lead: state.otpMasked ? `Msimbo umetumwa kwa ${state.otpMasked}.` : 'Weka msimbo uliotumwa kwa SMS.',
+      lead: state.otpBypass
+        ? 'Weka msimbo wa uthibitisho kuendelea.'
+        : (state.otpMasked ? `Msimbo umetumwa kwa ${state.otpMasked}.` : 'Weka msimbo uliotumwa kwa SMS.'),
       step: register || state.needsCompanySetup ? 'Hatua 2 ya 3' : 'Hatua 2 ya 2',
       submit: 'Thibitisha',
     },
@@ -1272,6 +1429,8 @@ function paintAuth() {
   }
   const fine = $('authFine');
   if (fine) fine.textContent = step === 'details' ? 'Kwa kusajili, unakubali masharti ya washirika wa HAUL.' : '';
+  $('forgotPassword')?.classList.toggle('hidden', step !== 'email');
+  if (step === 'email' || step === 'details') restoreLastEmail();
   paintOtpResend();
 }
 
@@ -1284,12 +1443,14 @@ async function sendAuthOtp() {
   }
   const purpose = state.mode === 'register' || state.needsCompanySetup ? 'signup' : 'login';
   const result = await postCarrierAuth('/carrier-auth/otp/send', { phone, purpose });
-  if (result.sent !== true) {
+  const bypass = result.otpBypass === true || result.devEmulatorOnly === true;
+  if (result.sent !== true && !bypass) {
     throw new Error('Msimbo haujatumwa. Jaribu tena.');
   }
   state.otpPhone = phone;
   state.otpMasked = String(result.phoneMasked || '');
   state.otpTicket = '';
+  state.otpBypass = bypass;
   state.authStep = 'otp';
   state.emailFallback = false;
   startOtpCooldown(result.cooldownSeconds || 60);
@@ -1298,10 +1459,13 @@ async function sendAuthOtp() {
 }
 
 async function finishCustomSignIn(customToken) {
+  if (!customToken || typeof customToken !== 'string') {
+    throw new Error('Kuingia kumeshindikana. Jaribu tena.');
+  }
   clearAuthIntent();
   state.needsCompanySetup = false;
   state.registrationLock = false;
-  await signInWithCustomToken(auth, customToken);
+  await signInWithRemember(rememberMeChecked(), () => signInWithCustomToken(auth, customToken));
 }
 
 async function verifyAuthOtp() {
@@ -1341,7 +1505,8 @@ async function verifyAuthOtp() {
     if (location.hash !== '#/register') location.hash = '#/register';
     paintAuth();
     initRegionControls();
-    if ($('authLead')) $('authLead').textContent = 'Hakuna akaunti kwa simu hii. Kamilisha usajili.';
+    if ($('authError')) $('authError').textContent = 'Hakuna akaunti kwa simu hii. Kamilisha usajili.';
+    $('regName')?.focus();
   }
 }
 
@@ -1424,21 +1589,31 @@ async function submitAuthDetails() {
   }
   try {
     const registered = await postCarrierAuth('/carrier-auth/otp/register', body);
+    if (fields.email) writeLastEmail(fields.email);
     await finishCustomSignIn(registered.customToken);
   } catch (error) {
-    if (error.code !== 'phone_taken') throw error;
-    const login = await postCarrierAuth('/carrier-auth/otp/login', {
-      phone: state.otpPhone,
-      otpTicket: state.otpTicket,
-    });
-    await finishCustomSignIn(login.customToken);
+    if (error.code === 'phone_taken' || error.code === 'email_taken') {
+      state.otpTicket = '';
+      state.authStep = 'phone';
+      state.mode = 'login';
+      state.emailFallback = error.code === 'email_taken';
+      rememberAuthIntent('login');
+      if (location.hash !== '#/login') location.hash = '#/login';
+      if (error.code === 'email_taken' && fields.email) {
+        writeLastEmail(fields.email);
+        const loginEmail = $('loginEmail');
+        if (loginEmail) loginEmail.value = fields.email;
+      }
+    }
+    throw error;
   }
 }
 
 async function submitEmailLogin() {
   if (!validateLoginForm()) return;
   const { email, password } = readLoginCredentials();
-  await signInWithEmailAndPassword(auth, email, password);
+  writeLastEmail(email);
+  await signInWithRemember(rememberMeChecked(), () => signInWithEmailAndPassword(auth, email, password));
   clearAuthIntent();
 }
 
@@ -1809,10 +1984,9 @@ let sessionEpoch = 0;
 
 async function loadSession(user) {
   const epoch = ++sessionEpoch;
-  const abandoned = () => epoch !== sessionEpoch || state.registrationLock;
+  const abandoned = () => epoch !== sessionEpoch;
   state.user = user;
-  state.isAdmin = user?.email?.toLowerCase() === ADMIN_EMAIL;
-  if (state.registrationLock) return;
+  state.isAdmin = Boolean(user?.email) && user.email.toLowerCase() === ADMIN_EMAIL;
   if (!user) {
     stopPortalPresence();
     state.carrier = null;
@@ -1822,6 +1996,7 @@ async function loadSession(user) {
     showPublic(authModeFromHash());
     return;
   }
+  try {
   const memberSnap = await getDoc(doc(db, 'carrierMembers', user.uid));
   if (abandoned()) return;
   if (!state.isAdmin && !memberSnap.exists()) {
@@ -1866,6 +2041,18 @@ async function loadSession(user) {
   startPortalPresence();
   render();
   refreshNoteBadge();
+  } catch (error) {
+    if (abandoned()) return;
+    console.error('[auth] session', error?.code || error);
+    state.needsCompanySetup = false;
+    $('public')?.classList.add('hidden');
+    $('app')?.classList.remove('hidden');
+    stopHeroCarousel();
+    const rawHash = location.hash.replace(/^#\/?/, '').trim();
+    if (!rawHash || rawHash === 'login' || rawHash === 'register') location.replace('#/overview');
+    const view = $('view');
+    if (view) view.innerHTML = `<p class="form-error">${esc(authErrorMessage(error))}</p>`;
+  }
 }
 
 function shipmentRows(rows) {
@@ -6776,6 +6963,7 @@ function bindAuth() {
   $('useEmailLogin')?.addEventListener('click', () => {
     state.emailFallback = true;
     $('authError').textContent = '';
+    restoreLastEmail();
     paintAuth();
     $('loginEmail')?.focus();
   });
@@ -6818,15 +7006,17 @@ function bindAuth() {
       $('loginEmail')?.focus();
       return;
     }
+    writeLastEmail(email);
     const btn = $('forgotPassword');
     if (btn) btn.disabled = true;
     try {
       await sendPasswordResetEmail(auth, email);
+      writeLastEmail(email);
       $('authSuccess').textContent = 'Barua ya kuweka nenosiri upya imetumwa. Angalia inbox yako.';
       $('authSuccess').classList.remove('hidden');
     } catch (error) {
       logAuthErrorCode(error);
-      $('authError').textContent = loginAuthErrorMessage(error);
+      $('authError').textContent = resetAuthErrorMessage(error);
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -6842,13 +7032,17 @@ function bindAuth() {
     toggle.textContent = show ? 'Ficha' : 'Onyesha';
     toggle.setAttribute('aria-label', show ? 'Ficha nenosiri' : 'Onyesha nenosiri');
   });
+  let authBusy = false;
   $('authForm').onsubmit = async (event) => {
     event.preventDefault();
+    if (authBusy) return;
+    authBusy = true;
     $('authError').textContent = '';
     $('authSuccess')?.classList.add('hidden');
     const submitBtn = $('authSubmit');
     const step = state.emailFallback ? 'email' : (state.authStep || 'phone');
     submitBtn.disabled = true;
+    submitBtn.setAttribute('aria-busy', 'true');
     submitBtn.textContent = step === 'phone' ? 'Inatuma…' : step === 'otp' ? 'Inathibitisha…' : step === 'details' ? 'Inafungua…' : 'Inaingia…';
     try {
       if (step === 'phone') await sendAuthOtp();
@@ -6860,18 +7054,25 @@ function bindAuth() {
       logAuthErrorCode(error);
       $('authError').textContent = calmAuthError(error);
     } finally {
+      authBusy = false;
+      submitBtn.removeAttribute('aria-busy');
       const cardVisible = $('authCard') && !$('authCard').classList.contains('hidden');
       if (cardVisible) paintAuth();
     }
   };
-  $('signOutBtn').onclick = () => {
+  $('signOutBtn').onclick = async () => {
     stopPortalPresence();
     if (state.carrier?.id) {
       updateDoc(doc(db, 'carriers', state.carrier.id), { portalOnlineAt: deleteField() }).catch(() => null);
     }
     state.needsCompanySetup = false;
+    state.registrationLock = false;
     clearAuthIntent();
-    signOut(auth);
+    try {
+      await signOut(auth);
+    } catch (error) {
+      logAuthErrorCode(error);
+    }
   };
   const closeNav = () => {
     $('sidebar').classList.remove('open');
@@ -6995,8 +7196,16 @@ setTimeout(() => {
 }, 2500);
 
 bindAuth();
+const rememberBox = $('rememberMe');
+if (rememberBox) {
+  rememberBox.checked = readRememberPreference();
+  state.rememberMe = rememberBox.checked;
+  rememberBox.addEventListener('change', () => {
+    state.rememberMe = rememberBox.checked;
+  });
+}
+restoreLastEmail();
 async function bootstrapAuth() {
-  await setPersistence(auth, browserLocalPersistence).catch(() => null);
   onAuthStateChanged(auth, (user) => {
     loadSession(user)
       .catch((error) => {

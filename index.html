@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Manrope:wght@400;500;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20261111c" />
+  <link rel="stylesheet" href="./styles.css?v=20261112a" />
 </head>
 <body>
   <div id="public" class="site-public">
@@ -187,7 +187,7 @@
               <option value="">Chagua mkoa</option>
             </select>
             <button class="btn link quiet" id="toggleEmailExtra" type="button">Ongeza barua pepe na nenosiri</button>
-            <div id="emailExtra" class="hidden">
+            <div id="emailExtra" class="auth-extra hidden">
               <label for="regEmail">Barua pepe</label>
               <input id="regEmail" name="regEmail" type="email" autocomplete="email" inputmode="email" />
               <label for="regPassword">Nenosiri</label>
@@ -199,15 +199,21 @@
           </div>
           <div id="stepEmail" class="hidden">
             <label for="loginEmail">Barua pepe</label>
-            <input id="loginEmail" name="email" type="email" autocomplete="username" inputmode="email" />
+            <input id="loginEmail" name="email" type="email" autocomplete="email" inputmode="email" spellcheck="false" />
             <label for="loginPassword">Nenosiri</label>
             <div class="password-wrap">
               <input id="loginPassword" name="password" type="password" autocomplete="current-password" data-password />
               <button class="password-toggle" type="button" data-toggle-password aria-label="Onyesha nenosiri">Onyesha</button>
             </div>
-            <button class="btn link" id="forgotPassword" type="button">Umesahau nenosiri?</button>
           </div>
-          <p class="form-success hidden" id="authSuccess"></p>
+          <div class="auth-assist" id="authAssist">
+            <label class="remember-row">
+              <input id="rememberMe" type="checkbox" name="remember" checked />
+              <span>Nikumbuke</span>
+            </label>
+            <button class="btn link hidden" id="forgotPassword" type="button">Umesahau nenosiri?</button>
+          </div>
+          <p class="form-success hidden" id="authSuccess" role="status"></p>
           <p class="form-error" id="authError" role="alert"></p>
           <button class="btn primary" type="submit" id="authSubmit">Tuma msimbo</button>
           <button class="auth-quiet" id="useEmailLogin" type="button">Ingia kwa barua pepe</button>
@@ -262,6 +268,6 @@
       <button type="button" class="photo-lightbox-x" data-lightbox-close aria-label="Funga">×</button>
     </figure>
   </div>
-  <script type="module" src="./app.js?v=20261111d"></script>
+  <script type="module" src="./app.js?v=20261112a"></script>
 </body>
 </html>

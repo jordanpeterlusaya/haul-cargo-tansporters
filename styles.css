@@ -5075,12 +5075,12 @@ body:has(#app:not(.hidden)) {
 #public .auth-shell {
   width: min(420px, calc(100% - 32px));
   max-width: 420px;
-  margin: 28px auto 80px;
+  margin: 32px auto 80px;
   padding: 0;
   background: #fff;
   border: 1px solid rgba(17, 17, 17, 0.08);
-  border-radius: 18px;
-  box-shadow: 0 24px 60px rgba(17, 17, 17, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(17, 17, 17, 0.08);
   overflow: hidden;
 }
 #public .auth-panel {
@@ -5108,11 +5108,11 @@ body:has(#app:not(.hidden)) {
 }
 #public .auth-panel h2 {
   margin-top: 6px;
-  font-family: "Cormorant Garamond", Georgia, serif;
-  font-weight: 600;
-  font-size: 2.6rem;
-  letter-spacing: -0.03em;
-  line-height: 0.95;
+  font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 1.75rem;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
   color: var(--haul-ink);
 }
 #public .auth-lead {
@@ -5248,4 +5248,57 @@ body:has(#app:not(.hidden)) {
   background: #f0fdf4;
   border-radius: 10px;
   padding: 10px 12px;
+  margin-top: 14px;
+}
+#public .auth-panel .form-success.hidden { display: none; }
+#public .auth-assist {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+#public .auth-panel .remember-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--haul-ink);
+  cursor: pointer;
+  user-select: none;
+}
+#public .auth-panel .remember-row input {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  margin: 0;
+  accent-color: #111;
+  flex: 0 0 auto;
+}
+#public .auth-assist .btn.link {
+  margin: 0 0 0 auto;
+  padding: 0;
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(17, 17, 17, 0.62);
+}
+#public .auth-extra {
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(17, 17, 17, 0.08);
+}
+#public .auth-panel .btn.primary[aria-busy="true"] {
+  opacity: 0.7;
+  pointer-events: none;
+}
+@media (max-width: 640px) {
+  #public .auth-shell { width: min(100% - 20px, 420px); margin-top: 16px; }
+  #public .auth-panel { padding: 20px 18px 22px; }
+  #public .auth-panel h2 { font-size: 1.5rem; }
+  #public .auth-assist { flex-wrap: wrap; }
 }
