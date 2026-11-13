@@ -3364,18 +3364,39 @@ body:has(#app:not(.hidden)) {
   margin-top: 6px;
 }
 #app .party-phone a { color: inherit; font-weight: 700; }
+#app .photo-strip-wrap {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--line, #e8e8e4);
+  border-radius: 16px;
+  background: #fff;
+}
+#app .photo-strip-wrap.is-empty {
+  background: #fffdf3;
+  border-color: #f0e6a8;
+}
+#app .photo-strip-label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #71717a;
+}
 #app .photo-strip {
   display: flex;
+  align-items: center;
   gap: 8px;
   overflow-x: auto;
   margin: 0;
   padding-bottom: 2px;
 }
 #app .photo-strip a,
+#app .photo-strip .photo-open img,
 #app .photo-strip img,
 #app .photo-fallback {
-  width: 88px;
-  height: 88px;
+  width: 96px;
+  height: 96px;
   border-radius: 14px;
   flex: 0 0 auto;
 }
@@ -3383,6 +3404,7 @@ body:has(#app:not(.hidden)) {
   object-fit: cover;
   background: #fff;
   box-shadow: 0 6px 14px rgba(17, 17, 19, 0.08);
+  display: block;
 }
 #app .photo-fallback {
   display: grid;
@@ -3390,6 +3412,10 @@ body:has(#app:not(.hidden)) {
   background: #fff;
   color: #9a9a94;
   border: 1px dashed #e4e4e0;
+}
+#app .photo-strip-hint {
+  font-size: 13px;
+  color: #6b7280;
 }
 #app .money-board {
   display: grid;
@@ -3674,8 +3700,21 @@ body:has(#app:not(.hidden)) {
   border-radius: 12px;
   overflow: hidden;
 }
+#app .mzigo-photo-hero.photo-open {
+  display: block;
+  width: 100%;
+  border-radius: 14px;
+}
+#app .cargo-photos .photo-open img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  display: block;
+  border-radius: 12px;
+}
 #app .photo-strip .photo-open img,
-#app .arrive-thumb-btn img { width: 72px; height: 72px; object-fit: cover; display: block; }
+#app .arrive-thumb-btn img { width: 96px; height: 96px; object-fit: cover; display: block; }
+#app .arrive-thumb-btn img { width: 72px; height: 72px; }
 .photo-lightbox {
   position: fixed;
   inset: 0;

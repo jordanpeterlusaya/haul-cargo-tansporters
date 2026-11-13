@@ -465,25 +465,26 @@ function cargoPhotoList(item) {
   return [...new Set(urls)].slice(0, 8);
 }
 
-/** Always-visible cargo photo block — large hero, not a tiny chip. */
+/** Always-visible cargo photo block — large hero + lightbox thumbs. */
 function renderCargoPhotos(item) {
   void ensureCargoPhotos(item);
   const photos = cargoPhotoList(item);
   if (!photos.length) {
+    const waiting = !photoEnrichDone[item?.id];
     return `<section class="mzigo-photo-block missing" data-photo-ship="${esc(item.id)}">
       <p class="mzigo-photo-label">Picha za mzigo</p>
-      <p class="mzigo-photo-empty">Inatafutwa picha… kama haionekani, fungua oda tena.</p>
+      <p class="mzigo-photo-empty">${waiting ? 'Inatafutwa picha…' : 'Hakuna picha ya mzigo kwenye oda hii.'}</p>
     </section>`;
   }
   const main = photos[0];
   const thumbs = photos.slice(1);
   return `<section class="mzigo-photo-block" data-photo-ship="${esc(item.id)}">
     <p class="mzigo-photo-label">Picha za mzigo</p>
-    <a class="mzigo-photo-hero" href="${esc(main)}" target="_blank" rel="noopener">
+    <button type="button" class="mzigo-photo-hero photo-open" data-photo="${esc(main)}" aria-label="Fungua picha">
       <img src="${esc(main)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="eager" />
-    </a>
+    </button>
     ${thumbs.length
-      ? `<div class="cargo-photos">${thumbs.map((url) => `<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="lazy" /></a>`).join('')}</div>`
+      ? `<div class="cargo-photos">${thumbs.map((url) => `<button type="button" class="photo-open" data-photo="${esc(url)}" aria-label="Fungua picha"><img src="${esc(url)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="lazy" /></button>`).join('')}</div>`
       : ''}
   </section>`;
 }
@@ -545,10 +546,9 @@ async function ensureCargoPhotos(item) {
       const idx = state.shipments.findIndex((row) => row.id === item.id);
       if (idx >= 0) state.shipments[idx] = { ...state.shipments[idx], ...patch };
       updateDoc(doc(db, 'carrierShipments', item.id), patch).catch(() => undefined);
-      render();
-      photoEnrichDone[item.id] = true;
     }
-    // If still empty, allow retry later (do not permanently mark done).
+    photoEnrichDone[item.id] = true;
+    if (photos.length || document.querySelector(`[data-photo-ship="${item.id}"]`)) render();
   } catch (error) {
     console.warn('ensureCargoPhotos failed', error);
   } finally {
@@ -3115,14 +3115,26 @@ function quoteSeed(item) {
   return fee > 0 ? String(fee) : '';
 }
 
-function photoStrip(item) {
+function photoStrip(item, opts = {}) {
   // Photos are public on the desk brief; phones stay gated until agent Accept.
   void ensureCargoPhotos(item);
   const photos = cargoPhotoList(item);
+  const labeled = opts.labeled !== false;
+  const label = labeled ? `<p class="photo-strip-label">Picha za mzigo</p>` : '';
   if (!photos.length) {
-    return `<div class="photo-strip is-empty" aria-hidden="true"><span class="photo-fallback">${uiIcon('box')}</span></div>`;
+    const waiting = !photoEnrichDone[item?.id];
+    return `<section class="photo-strip-wrap is-empty" data-photo-ship="${esc(item?.id || '')}">
+      ${label}
+      <div class="photo-strip" aria-live="polite">
+        <span class="photo-fallback">${uiIcon('box')}</span>
+        <span class="photo-strip-hint">${waiting ? 'Inatafutwa picha…' : 'Hakuna picha ya mzigo'}</span>
+      </div>
+    </section>`;
   }
-  return `<div class="photo-strip">${photos.map((url) => `<button type="button" class="photo-open" data-photo="${esc(url)}" aria-label="Fungua picha"><img src="${esc(url)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="lazy" /></button>`).join('')}</div>`;
+  return `<section class="photo-strip-wrap" data-photo-ship="${esc(item.id)}">
+    ${label}
+    <div class="photo-strip">${photos.map((url) => `<button type="button" class="photo-open" data-photo="${esc(url)}" aria-label="Fungua picha"><img src="${esc(url)}" alt="Picha ya mzigo" referrerpolicy="no-referrer" loading="lazy" /></button>`).join('')}</div>
+  </section>`;
 }
 
 function moneyValueCell(label, valueHtml) {
@@ -3821,6 +3833,7 @@ function orderBrief(item, opts = {}) {
       ${stageBadge(item)}
     </header>
     ${flowProgress(item)}
+    ${photoStrip(item)}
     <dl class="review-dl">
       <div><dt>Pickup</dt><dd>${esc(fromFull)}</dd></div>
       <div><dt>Destination</dt><dd>${esc(toFull)}</dd></div>
@@ -3828,7 +3841,6 @@ function orderBrief(item, opts = {}) {
     <details>
       <summary>Cargo</summary>
       <p class="muted">${esc(item.weightKg || 0)} kg${item.parcelDescription ? ` · ${esc(item.parcelDescription)}` : ''}${item.outsideParcelSize ? ` · ${esc(item.outsideParcelSize)}` : ''}</p>
-      ${photoStrip(item)}
     </details>
     <details open>
       <summary>Customer contact</summary>
