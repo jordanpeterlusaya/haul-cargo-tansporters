@@ -2049,8 +2049,10 @@ function startPortalPresence() {
   if (!state.carrier?.id) return;
   enableOfferNotifications();
   pulsePortalPresence();
+  // Keep pulsing while the tab is open but backgrounded. Skipping hidden pulses
+  // marked verified desks offline within PORTAL_ONLINE_MS, so new orders sat in
+  // matching with no offeredCarrierId and never appeared on this portal query.
   presenceTimer = setInterval(() => {
-    if (document.visibilityState === 'hidden') return;
     pulsePortalPresence();
   }, 45_000);
   if (!presenceBound) {
