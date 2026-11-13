@@ -180,6 +180,7 @@ const state = {
   otpTicket: '',
   otpMasked: '',
   otpCooldown: 0,
+  otpWaitPhone: '',
   needsCompanySetup: false,
   registrationLock: false,
   rememberMe: readRememberPreference(),
@@ -1229,9 +1230,11 @@ function validBusinessEmail(email) {
 let otpCooldownTimer = null;
 
 function clearOtpCooldown() {
-  if (!otpCooldownTimer) return;
-  clearInterval(otpCooldownTimer);
-  otpCooldownTimer = null;
+  if (otpCooldownTimer) {
+    clearInterval(otpCooldownTimer);
+    otpCooldownTimer = null;
+  }
+  state.otpWaitPhone = '';
 }
 
 function paintOtpResend() {
@@ -1242,16 +1245,58 @@ function paintOtpResend() {
   btn.textContent = wait ? `Tuma tena (${state.otpCooldown}s)` : 'Tuma tena';
 }
 
-function startOtpCooldown(seconds) {
+function phoneSendLocked() {
+  if (!(state.otpCooldown > 0)) return false;
+  const step = state.emailFallback ? 'email' : (state.authStep || 'phone');
+  if (step !== 'phone') return false;
+  const typed = smsPhone($('authPhone')?.value || '');
+  const lockedPhone = String(state.otpWaitPhone || '');
+  if (lockedPhone && typed && typed !== lockedPhone) return false;
+  return true;
+}
+
+function paintPhoneSendWait() {
+  const submit = $('authSubmit');
+  if (!submit || submit.getAttribute('aria-busy') === 'true') return;
+  const step = state.emailFallback ? 'email' : (state.authStep || 'phone');
+  if (step !== 'phone') return;
+  const wait = phoneSendLocked();
+  submit.disabled = wait;
+  submit.textContent = wait ? `Subiri ${state.otpCooldown}s` : 'Tuma msimbo';
+}
+
+function startOtpCooldown(seconds, phone) {
   clearOtpCooldown();
+  const normalized = smsPhone(phone || '');
+  if (normalized) state.otpWaitPhone = normalized;
   state.otpCooldown = Math.max(0, Math.round(Number(seconds) || 0));
   paintOtpResend();
+  paintPhoneSendWait();
   if (state.otpCooldown <= 0) return;
   otpCooldownTimer = setInterval(() => {
     state.otpCooldown = Math.max(0, state.otpCooldown - 1);
     paintOtpResend();
-    if (state.otpCooldown <= 0) clearOtpCooldown();
+    paintPhoneSendWait();
+    if (state.otpCooldown <= 0) {
+      clearOtpCooldown();
+      paintPhoneSendWait();
+    }
   }, 1000);
+}
+
+function otpWaitSeconds(error) {
+  const fromField = Math.ceil(Number(error?.retryAfterSeconds));
+  if (Number.isFinite(fromField) && fromField > 0) return fromField;
+  const match = String(error?.message || '').match(/sekunde\s+(\d+)/i);
+  if (match) return Math.max(1, Number(match[1]) || 0);
+  return 0;
+}
+
+function noteOtpSendLimit(error, phone) {
+  const code = String(error?.code || '');
+  if (code !== 'cooldown' && code !== 'rate_limit') return;
+  const wait = otpWaitSeconds(error);
+  if (wait > 0) startOtpCooldown(wait, phone || authPhoneValue());
 }
 
 function calmAuthError(error) {
@@ -1356,6 +1401,7 @@ async function postCarrierAuth(path, body, token) {
     const error = new Error(calmAuthError({ message: payload?.error, code: payload?.code }));
     error.code = String(payload?.code || '');
     error.statusCode = response.status;
+    error.retryAfterSeconds = Math.ceil(Number(payload?.retryAfterSeconds) || 0);
     throw error;
   }
   return payload;
@@ -1412,8 +1458,9 @@ function paintAuth() {
   if ($('authLead')) $('authLead').textContent = view.lead;
   if ($('authStep')) $('authStep').textContent = view.step;
   if ($('authSubmit')) {
-    $('authSubmit').textContent = view.submit;
-    $('authSubmit').disabled = false;
+    const phoneWait = phoneSendLocked();
+    $('authSubmit').textContent = phoneWait ? `Subiri ${state.otpCooldown}s` : view.submit;
+    $('authSubmit').disabled = phoneWait;
   }
   const fine = $('authFine');
   if (fine) fine.textContent = step === 'details' ? 'Kwa kusajili, unakubali masharti ya washirika wa HAUL.' : '';
@@ -1441,7 +1488,7 @@ async function sendAuthOtp() {
   state.otpBypass = bypass;
   state.authStep = 'otp';
   state.emailFallback = false;
-  startOtpCooldown(result.cooldownSeconds || 60);
+  startOtpCooldown(result.cooldownSeconds || 60, phone);
   paintAuth();
   $('authOtp')?.focus();
 }
@@ -1864,6 +1911,8 @@ function listen() {
     if (paint) scheduleRender();
   }, (error) => {
     console.warn('portal listener failed', error?.code || error?.message || error);
+    // onSnapshot reconnects automatically; reclaim live eligibility after a drop.
+    if (state.carrier?.id) pulsePortalPresence();
   }));
   state.unsubscribers.push(onSnapshot(doc(db, 'carriers', id), (snap) => {
     if (!snap.exists()) return;
@@ -1979,6 +2028,9 @@ function startPortalPresence() {
     presenceBound = true;
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && state.carrier?.id) pulsePortalPresence();
+    });
+    window.addEventListener('online', () => {
+      if (state.carrier?.id) pulsePortalPresence();
     });
     window.addEventListener('beforeunload', () => {
       // Best-effort offline mark; matching window is short either way.
@@ -5737,90 +5789,11 @@ async function rememberBusMatch(orderId, status, routeLabel) {
   }
 }
 
+/** Admin match runs only on the backend — never write offers from the browser. */
 async function runMatching() {
   if (!state.isAdmin) throw new Error('Only the Haul desk can match orders.');
-  const [ordersSnap, carriersSnap, routesSnap, vehiclesSnap, shipmentsSnap] = await Promise.all([
-    getDocs(query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(40))),
-    getDocs(collection(db, 'carriers')),
-    getDocs(query(collection(db, 'carrierRoutes'), where('active', '==', true))),
-    getDocs(query(collection(db, 'carrierVehicles'), where('status', '==', 'active'))),
-    getDocs(query(collection(db, 'carrierShipments'), limit(80))),
-  ]);
-  const shipmentRows = shipmentsSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
-  const shipments = new Map(shipmentRows.map((item) => [item.id, item]));
-  const carriers = carriersSnap.docs
-    .map((item) => ({ id: item.id, ...item.data() }))
-    .filter((carrier) => {
-      const status = String(carrier.status || '').toLowerCase();
-      if (status !== 'verified') return false;
-      if (carrier.offersPaused || carrier.fraudHold) return false;
-      return carrierIsOnline(carrier);
-    });
-  const routesOf = (id) => routesSnap.docs.map((item) => ({ id: item.id, ...item.data() })).filter((item) => item.carrierId === id);
-  const vehiclesOf = (id) => vehiclesSnap.docs.map((item) => item.data()).filter((item) => item.carrierId === id);
-  let offered = 0;
-  for (const orderDoc of ordersSnap.docs) {
-    const order = { id: orderDoc.id, ...orderDoc.data() };
-    if (!isBusParcel(order)) continue;
-    const existing = shipments.get(order.id);
-    if (customerCancelled(order) || customerCancelled(existing)) continue;
-    if (existing?.carrierId) continue;
-    if (existing?.shipmentStatus === 'assigned' && existing.offeredCarrierId) continue;
-    const declined = new Set(existing?.declinedCarrierIds || []);
-    if (existing?.shipmentStatus === 'assigned' && existing.offeredCarrierId) declined.add(existing.offeredCarrierId);
-    const ranked = carriers
-      .map((carrier) => scoreCarrier(order, carrier, routesOf(carrier.id), vehiclesOf(carrier.id), {
-        usedByRoute: heldWeightByRoute(shipmentRows, order.id),
-      }))
-      .filter((entry) => entry && !declined.has(entry.carrierId))
-      .sort((a, b) => b.score - a.score);
-    const best = ranked[0];
-    const payload = {
-      ...shipmentCopy(order, order.id),
-      cashStatus: existing?.cashStatus || 'unpaid',
-      updatedAt: serverTimestamp(),
-      createdAt: existing?.createdAt || serverTimestamp(),
-    };
-    if (!best) {
-      await setDoc(doc(db, 'carrierShipments', order.id), {
-        ...payload,
-        shipmentStatus: 'matching',
-        offeredCarrierId: null,
-        capacityReserved: false,
-      }, { merge: true });
-      await rememberBusMatch(order.id, 'matching', '');
-      continue;
-    }
-    await setDoc(doc(db, 'carrierShipments', order.id), {
-      ...payload,
-      shipmentStatus: 'assigned',
-      pickupStatus: 'assigned',
-      offeredCarrierId: best.carrierId,
-      offerScore: best.score,
-      routeId: null,
-      routeLabel: best.routeLabel,
-      departureTime: deleteField(),
-      arrivalTime: deleteField(),
-      pickupMode: deleteField(),
-      trackStep: deleteField(),
-      offerExpiresAt: new Date(Date.now() + OFFER_MS),
-      offeredAt: serverTimestamp(),
-      declinedCarrierIds: [...declined],
-      capacityReserved: true,
-      statusHistory: arrayUnion({ status: 'assigned', at: stamp(), actor: 'haul' }),
-    }, { merge: true });
-    await rememberBusMatch(order.id, 'offered', best.routeLabel || '');
-    await setDoc(doc(db, 'carriers', best.carrierId), { ordersReceived: increment(1) }, { merge: true });
-    await addDoc(collection(db, 'carriers', best.carrierId, 'notifications'), {
-      title: 'New assignment',
-      body: `${payload.orderNumber} · ${payload.destination} · ${best.score}%`,
-      orderId: order.id,
-      createdAt: stamp(),
-      read: false,
-    });
-    offered += 1;
-  }
-  return offered;
+  const payload = await portalCall('/carrier/portal/admin/match', {});
+  return Number(payload?.offered) || 0;
 }
 
 async function carrierRouteLabelsById() {
@@ -6185,6 +6158,8 @@ function apiMiss(error) {
 async function writeStageFallback(id, current, patch, act) {
   const ref = doc(db, 'carrierShipments', id);
   if (act === 'accept') {
+    const carrierId = state.carrier?.id;
+    if (!carrierId) throw new Error('No company on this login.');
     const fee = shippingFeeOf({ id, ...current });
     const rate = QUOTE_COMMISSION_RATE;
     const haulFee = quoteCommission(fee);
@@ -6197,28 +6172,43 @@ async function writeStageFallback(id, current, patch, act) {
     } catch {
       /* optional enrich */
     }
-    await updateDoc(ref, {
-      ...patch,
-      pickupStatus: 'assigned',
-      acceptedAt: serverTimestamp(),
-      agentAcceptedAt: serverTimestamp(),
-      manifestDate: darTodayKey(),
-      cashExpected: fee,
-      haulFee,
-      haulFeeRate: fee > 0 ? haulFee / fee : rate,
-      carrierNet: Math.max(0, fee - haulFee),
-      commissionCountedAt: serverTimestamp(),
-      ...(fee > 0 ? {
-        fareLabel: label,
-        quoteStatus: quoteAccepted({ id, ...current }) ? 'confirmed' : 'offered',
-        carrierQuoteTzs: fee,
-        shippingFeeTzs: fee,
-        ...(quoteAccepted({ id, ...current }) ? { customerAcceptedQuote: true } : {}),
-      } : {}),
-      statusHistory: arrayUnion({ status: 'accepted', label: 'Accepted', at: stamp(), actor: state.user?.email || '' }),
-      ...extras,
+    // Atomic accept: only the offered company wins; two desks cannot both set carrierId.
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('Order not found.');
+      const live = snap.data() || {};
+      if (live.carrierId && live.carrierId !== carrierId) throw new Error('This order is already accepted by another company.');
+      if (live.carrierId === carrierId) return;
+      if (live.offeredCarrierId !== carrierId || String(live.shipmentStatus || '') !== 'assigned') {
+        throw new Error('This order is no longer available to accept.');
+      }
+      const expires = timeMs(live.offerExpiresAt);
+      if (expires && expires <= Date.now()) throw new Error('Offer expired.');
+      tx.set(ref, {
+        ...patch,
+        carrierId,
+        pickupStatus: 'assigned',
+        acceptedAt: serverTimestamp(),
+        agentAcceptedAt: serverTimestamp(),
+        manifestDate: darTodayKey(),
+        cashExpected: fee,
+        haulFee,
+        haulFeeRate: fee > 0 ? haulFee / fee : rate,
+        carrierNet: Math.max(0, fee - haulFee),
+        commissionCountedAt: serverTimestamp(),
+        ...(fee > 0 ? {
+          fareLabel: label,
+          quoteStatus: quoteAccepted({ id, ...current, ...live }) ? 'confirmed' : 'offered',
+          carrierQuoteTzs: fee,
+          shippingFeeTzs: fee,
+          ...(quoteAccepted({ id, ...current, ...live }) ? { customerAcceptedQuote: true } : {}),
+        } : {}),
+        statusHistory: arrayUnion({ status: 'accepted', label: 'Accepted', at: stamp(), actor: state.user?.email || '' }),
+        ...extras,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      tx.set(doc(db, 'carriers', carrierId), { accepted: increment(1) }, { merge: true });
     });
-    await updateDoc(doc(db, 'carriers', state.carrier.id), { accepted: increment(1) });
     return { party: extras };
   }
   const delivered = act === 'deliver';
@@ -6582,6 +6572,7 @@ async function onViewClick(event) {
     const rejectPatch = {
       shipmentStatus: 'matching',
       offeredCarrierId: null,
+      offerExpiresAt: null,
       pickupMode: deleteField(),
       trackStep: deleteField(),
       declinedCarrierIds: arrayUnion(state.carrier.id),
@@ -7042,6 +7033,10 @@ function bindAuth() {
     paintAuth();
     $('authPhone')?.focus();
   });
+  $('authPhone')?.addEventListener('input', () => {
+    if ((state.authStep || 'phone') !== 'phone' || state.emailFallback) return;
+    paintPhoneSendWait();
+  });
   $('otpResend')?.addEventListener('click', async () => {
     if (state.otpCooldown > 0) return;
     $('authError').textContent = '';
@@ -7051,6 +7046,7 @@ function bindAuth() {
       await sendAuthOtp();
     } catch (error) {
       logAuthErrorCode(error);
+      noteOtpSendLimit(error, state.otpPhone || authPhoneValue());
       $('authError').textContent = calmAuthError(error);
       paintOtpResend();
     }
@@ -7106,6 +7102,10 @@ function bindAuth() {
     submitBtn.setAttribute('aria-busy', 'true');
     submitBtn.textContent = step === 'phone' ? 'Inatuma…' : step === 'otp' ? 'Inathibitisha…' : step === 'details' ? 'Inafungua…' : 'Inaingia…';
     try {
+      if (step === 'phone' && phoneSendLocked()) {
+        $('authError').textContent = `Subiri sekunde ${state.otpCooldown} kabla ya kutuma tena.`;
+        return;
+      }
       if (step === 'phone') await sendAuthOtp();
       else if (step === 'otp') await verifyAuthOtp();
       else if (step === 'details') await submitAuthDetails();
@@ -7113,6 +7113,7 @@ function bindAuth() {
     } catch (error) {
       state.registrationLock = false;
       logAuthErrorCode(error);
+      if (step === 'phone' || step === 'otp') noteOtpSendLimit(error, authPhoneValue());
       $('authError').textContent = calmAuthError(error);
     } finally {
       authBusy = false;
