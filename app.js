@@ -190,6 +190,8 @@ const state = {
   quoteDraftAmount: {},
   deskOpen: '',
   deskPage: 1,
+  inboxLimit: 40,
+  inboxTruncated: false,
   deskTab: '',
   deskQuery: '',
   deskFrom: '',
@@ -377,6 +379,7 @@ function companyAlreadyRejected(item) {
 }
 
 function visibleDeskRow(item) {
+  if (String(item?.shipmentStatus || '').toLowerCase() === 'expired') return false;
   return transporterShipment(item) && !companyAlreadyRejected(item);
 }
 
@@ -1928,7 +1931,8 @@ function listen() {
   }, (error) => {
     console.warn('portal carrier listener failed', error?.code || error?.message || error);
   }));
-  watch(query(collection(db, 'carrierShipments'), where('offeredCarrierId', '==', id)), (rows) => {
+  const inboxCap = Math.max(40, Number(state.inboxLimit) || 40);
+  const applyOffered = (rows) => {
     dropHidden(rows);
     const live = rows.filter(visibleDeskRow);
     const incoming = live.filter((item) => item.shipmentStatus === 'assigned' && !item.carrierId && !state.knownOfferIds?.has(item.id) && !state.knownOfferIds?.has(orderKey(item)));
@@ -1949,7 +1953,32 @@ function listen() {
     state.offersReady = true;
     buckets.offered = live;
     publishShipments();
-  });
+  };
+  const watchOffered = (paged) => {
+    const base = [collection(db, 'carrierShipments'), where('offeredCarrierId', '==', id)];
+    const q = paged
+      ? query(...base, orderBy('updatedAt', 'desc'), limit(inboxCap))
+      : query(...base);
+    const stop = onSnapshot(q, (snap) => {
+      state.inboxTruncated = paged && snap.size >= inboxCap;
+      applyOffered(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
+      scheduleRender();
+    }, (error) => {
+      console.warn('portal listener failed', error?.code || error?.message || error);
+      const missingIndex = error?.code === 'failed-precondition' || /index/i.test(String(error?.message || ''));
+      if (paged && missingIndex) {
+        state.inboxTruncated = false;
+        const idx = state.unsubscribers.indexOf(stop);
+        if (idx >= 0) state.unsubscribers.splice(idx, 1);
+        try { stop(); } catch { /* already stopped */ }
+        watchOffered(false);
+        return;
+      }
+      if (state.carrier?.id) pulsePortalPresence();
+    });
+    state.unsubscribers.push(stop);
+  };
+  watchOffered(true);
   watch(query(collection(db, 'carrierShipments'), where('carrierId', '==', id)), (rows) => {
     dropHidden(rows);
     buckets.owned = rows.filter(visibleDeskRow);
@@ -2030,7 +2059,9 @@ function startPortalPresence() {
       if (document.visibilityState === 'visible' && state.carrier?.id) pulsePortalPresence();
     });
     window.addEventListener('online', () => {
-      if (state.carrier?.id) pulsePortalPresence();
+      if (!state.carrier?.id) return;
+      pulsePortalPresence();
+      listen();
     });
     window.addEventListener('beforeunload', () => {
       // Best-effort offline mark; matching window is short either way.
@@ -3652,11 +3683,15 @@ function whatsappOrderText(item) {
 }
 
 function orderPager(count, page, pages) {
+  const older = state.inboxTruncated
+    ? `<button class="btn line small" type="button" data-desk="inbox">Older offers</button>`
+    : '';
   return `<div class="pager">
     <span>${count} orders · page ${page} of ${pages}</span>
     <div>
       <button class="btn line small" type="button" data-desk="page" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>Previous</button>
       <button class="btn line small" type="button" data-desk="page" data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>Next</button>
+      ${older}
     </div>
   </div>`;
 }
@@ -6445,6 +6480,11 @@ async function onViewClick(event) {
     }
     if (deskCtl.dataset.desk === 'page' && !deskCtl.disabled) {
       state.deskPage = Math.max(1, Number(deskCtl.dataset.page) || 1);
+    }
+    if (deskCtl.dataset.desk === 'inbox') {
+      state.inboxLimit = Math.max(40, Number(state.inboxLimit) || 40) + 40;
+      listen();
+      return;
     }
     render();
     document.querySelector('.arrive-card.is-open')?.scrollIntoView({ block: 'nearest' });
