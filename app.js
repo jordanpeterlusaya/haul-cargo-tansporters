@@ -3065,6 +3065,16 @@ async function ensureAcceptedParty(item) {
   return item;
 }
 
+function localShipment(id) {
+  const key = String(id || '');
+  if (!key) return null;
+  const row = (state.shipments || []).find((item) => item.id === key || orderKey(item) === key);
+  const pending = state.pendingStages[key] || (row ? state.pendingStages[row.id] : null) || {};
+  if (row) return { ...row, ...pending };
+  if (Object.keys(pending).length) return { id: key, ...pending };
+  return null;
+}
+
 function rememberStage(id, patch, tab) {
   state.pendingStages[id] = { ...(state.pendingStages[id] || {}), ...patch };
   const row = state.shipments.find((item) => item.id === id);
@@ -6276,6 +6286,24 @@ async function writeStageFallback(id, current, patch, act) {
   return {};
 }
 
+async function writePortalStage(path, body) {
+  try {
+    return { payload: await portalCall(path, body), usedFallback: false };
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (/already/i.test(message)) return { payload: { already: true }, usedFallback: false };
+    if (apiMiss(error)) throw error;
+    // One safe retry for flaky network / transient API failures (idempotent server handlers).
+    try {
+      return { payload: await portalCall(path, body), usedFallback: false };
+    } catch (retryError) {
+      const retryMsg = String(retryError?.message || '');
+      if (/already/i.test(retryMsg)) return { payload: { already: true }, usedFallback: false };
+      throw retryError;
+    }
+  }
+}
+
 async function runOrderTransition(act, id, current) {
   const carrierId = state.carrier?.id;
   if (!carrierId) throw new Error('No company on this login.');
@@ -6310,6 +6338,7 @@ async function runOrderTransition(act, id, current) {
     state.stageBusy = id;
     state.stageBusyIds[id] = true;
     state.deskOpen = id;
+    render();
     try {
       await portalCall('/carrier/portal/journey', {
         shipmentId: id,
@@ -6350,7 +6379,9 @@ async function runOrderTransition(act, id, current) {
   if (act === 'accept') shown.acceptedAt = shown.acceptedAt || nowIso;
   if (act === 'start-transit') shown.inTransitAt = nowIso;
   if (act === 'deliver') shown.deliveredAt = nowIso;
+  // Instant UI: patch local row + busy/disabled button before any network wait.
   rememberStage(id, shown, tab);
+  render();
   const path = act === 'accept'
     ? '/carrier/portal/accept'
     : act === 'deliver'
@@ -6367,19 +6398,26 @@ async function runOrderTransition(act, id, current) {
   if (act === 'deliver') body.locationName = 'Delivered';
   try {
     let payload = {};
+    let usedFallback = false;
     try {
-      payload = await portalCall(path, body);
+      const written = await writePortalStage(path, body);
+      payload = written.payload;
     } catch (error) {
-      const message = String(error?.message || '');
-      if (/already/i.test(message)) payload = { already: true };
-      else if (apiMiss(error)) payload = await writeStageFallback(id, live, gate.patch, act);
-      else throw error;
+      if (apiMiss(error)) {
+        payload = await writeStageFallback(id, live, gate.patch, act);
+        usedFallback = true;
+      } else {
+        throw error;
+      }
     }
-    await mirrorCustomerOrder(id, {
-      ...live,
-      ...gate.patch,
-      carrierId: act === 'accept' ? carrierId : (live.carrierId || carrierId),
-    });
+    // Portal API already mirrors the customer order. Only mirror from the client on Firestore fallback.
+    if (usedFallback) {
+      void mirrorCustomerOrder(id, {
+        ...live,
+        ...gate.patch,
+        carrierId: act === 'accept' ? carrierId : (live.carrierId || carrierId),
+      });
+    }
     if (act === 'accept' && payload?.party && typeof payload.party === 'object') {
       const row = state.shipments.find((item) => item.id === id) || live;
       const party = partyPatchFromSource(row, payload.party);
@@ -6552,6 +6590,23 @@ async function onViewClick(event) {
     await applyManifestMark(id, 'delivered');
     return;
   }
+  // Status buttons: use live listener state (optimistic path). Avoid a blocking getDoc before every click.
+  if (act === 'accept' || act === 'start-transit' || act === 'deliver' || act === 'verify') {
+    let current = localShipment(id);
+    if (!current) {
+      const snap = await getDoc(doc(db, 'carrierShipments', id));
+      if (!snap.exists() || !mine({ id, ...snap.data() })) return;
+      current = snap.data();
+    } else if (!mine({ id, ...current })) {
+      return;
+    }
+    if (customerCancelled({ id, ...current })) {
+      window.alert('Mteja amefuta oda hii.');
+      return;
+    }
+    await runOrderTransition(act, id, current);
+    return;
+  }
   const ref = doc(db, 'carrierShipments', id);
   const snap = await getDoc(ref);
   if (!snap.exists() || !mine({ id, ...snap.data() })) return;
@@ -6562,10 +6617,6 @@ async function onViewClick(event) {
   }
   if (quotePending({ id, ...current }) && ['set-status', 'journey', 'track', 'pickup'].includes(act)) {
     window.alert('Mteja bado hajaukubali bei ya usafirishaji.');
-    return;
-  }
-  if (act === 'accept' || act === 'start-transit' || act === 'deliver' || act === 'verify') {
-    await runOrderTransition(act, id, current, ref);
     return;
   }
   if (act === 'set-status') {
