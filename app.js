@@ -1947,6 +1947,11 @@ function listen() {
     if (state.offersReady) {
       incoming.forEach((item) => announceIncomingOffer(item));
     }
+    live
+      .filter((item) => item.shipmentStatus === 'assigned' && !item.carrierId)
+      .forEach((item) => {
+        void publishCarrierCard(item.orderId || item.id);
+      });
     state.knownOfferIds = new Set(
       live.filter((item) => item.shipmentStatus === 'assigned' && !item.carrierId).flatMap((item) => [item.id, orderKey(item)])
     );
@@ -3404,6 +3409,44 @@ function ordersDesk(tab) {
   </div>`;
 }
 
+function publicProfileUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text)) throw new Error('Weka kiungo kinachoanza na https://');
+  return text;
+}
+
+function carrierPublicCard(carrier) {
+  const name = String(carrier?.companyName || carrier?.tradingName || carrier?.name || '').trim();
+  const person = String(carrier?.contactPerson || '').trim();
+  const phone = String(carrier?.phone || carrier?.notificationPhone || carrier?.phoneNormalized || '').trim();
+  const photo = String(carrier?.photoUrl || '').trim();
+  const social = String(carrier?.socialUrl || '').trim();
+  const card = {};
+  if (name) card.carrierName = name;
+  if (person || name) card.carrierAgentName = person || name;
+  if (phone) card.carrierPhone = phone;
+  if (/^https?:\/\//i.test(photo)) card.carrierPhotoUrl = photo;
+  if (/^https?:\/\//i.test(social)) card.carrierSocialUrl = social;
+  return card;
+}
+
+async function publishCarrierCard(orderId) {
+  const id = String(orderId || '').trim();
+  const card = carrierPublicCard(state.carrier);
+  if (!id || !card.carrierName) return;
+  const key = `${id}|${card.carrierName}|${card.carrierPhone || ''}|${card.carrierPhotoUrl || ''}|${card.carrierSocialUrl || ''}`;
+  if (!state.publishedCarrierCards) state.publishedCarrierCards = new Set();
+  if (state.publishedCarrierCards.has(key)) return;
+  state.publishedCarrierCards.add(key);
+  try {
+    await setDoc(doc(db, 'orders', id), { ...card, updatedAt: serverTimestamp() }, { merge: true });
+  } catch (error) {
+    state.publishedCarrierCards.delete(key);
+    console.warn('carrier card publish failed', id, error?.message || error);
+  }
+}
+
 async function sendCompanyQuote(shipmentId, amount) {
   const current = state.shipments.find((item) => item.id === shipmentId);
   if (customerCancelled(current)) throw new Error('Mteja amefuta oda hii.');
@@ -3426,6 +3469,13 @@ async function sendCompanyQuote(shipmentId, amount) {
       sent.quoteDraftCommissionTzs = draftCommission;
       sent.fareLabel = label;
       sent.quotedAt = new Date().toISOString();
+    }
+    const quotedOrderId = String(sent?.orderId || shipmentId).trim();
+    if (quotedOrderId) {
+      await setDoc(doc(db, 'orders', quotedOrderId), {
+        ...carrierPublicCard(state.carrier),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     }
     return;
   } catch (error) {
@@ -3455,6 +3505,7 @@ async function sendCompanyQuote(shipmentId, amount) {
     deliveryFee: amount,
     fareLabel: label,
     totalLabel: label,
+    ...carrierPublicCard(state.carrier),
     // Never copy declared cargo value into shipping fields.
     updatedAt: serverTimestamp(),
   }, { merge: true });
@@ -3528,6 +3579,8 @@ async function mirrorCustomerOrder(shipmentId, shipment, extras = {}) {
     patch.carrierName = deleteField();
     patch.carrierAgentName = deleteField();
     patch.carrierPhone = deleteField();
+    patch.carrierPhotoUrl = deleteField();
+    patch.carrierSocialUrl = deleteField();
     patch.carrierBusName = deleteField();
   }
   if (status === 'delivered' || trackStep === 'handed') {
@@ -4676,6 +4729,9 @@ function settingsPage() {
       <p class="muted">${orderSmsPhone(carrier) ? 'SMS za oda zinaenda namba hii iliyothibitishwa.' : 'SMS za oda hazitumwi mpaka simu ithibitishwe kwa OTP.'}</p>
       <label>Barua pepe</label><input value="${esc(carrier.email || '')}" disabled />
       <label>Mahali pa ofisi</label><input name="location" value="${esc(carrier.location || '')}" />
+      <label>Picha (URL)</label><input name="photoUrl" value="${esc(carrier.photoUrl || '')}" placeholder="https://" />
+      <label>Mtandao wa kijamii</label><input name="socialUrl" value="${esc(carrier.socialUrl || '')}" placeholder="https://instagram.com/…" />
+      <p class="muted">Mteja anaona jina, simu, picha, na kiungo hiki.</p>
       <button class="btn primary" type="submit">Hifadhi</button></form>`;
 }
 
@@ -5653,7 +5709,9 @@ function companyPages() {
     const placeLine = [office, region].filter(Boolean).join(' · ') || 'Office location not set';
     return `<section class="co-profile">
       <header class="co-hero panel">
-        <div class="co-avatar-lg" aria-hidden="true">${esc(companyInitials(companyName))}</div>
+        ${/^https?:\/\//i.test(String(carrier.photoUrl || ''))
+          ? `<img class="co-avatar-lg" src="${esc(carrier.photoUrl)}" alt="" style="object-fit:cover" />`
+          : `<div class="co-avatar-lg" aria-hidden="true">${esc(companyInitials(companyName))}</div>`}
         <div class="co-hero-copy">
           <p class="co-eyebrow">HAUL · Company Profile</p>
           <h1>${esc(companyName)}</h1>
@@ -5731,6 +5789,11 @@ function companyPages() {
         </fieldset>
         <label>Business details</label>
         <textarea name="businessDetails">${esc(carrier.businessDetails || '')}</textarea>
+        <label>Profile photo URL</label>
+        <input name="photoUrl" value="${esc(carrier.photoUrl || '')}" placeholder="https://" inputmode="url" />
+        <label>Social link</label>
+        <input name="socialUrl" value="${esc(carrier.socialUrl || '')}" placeholder="https://instagram.com/…" inputmode="url" />
+        <p class="muted">Customers see your name, phone, photo, and this link while waiting for your price.</p>
         <label class="check-row"><input type="checkbox" name="notifySms" value="1" ${carrier.notifySms !== false ? 'checked' : ''}/><span>Tuma SMS za oda kwenye simu iliyothibitishwa</span></label>
         <p class="muted">${orderSmsPhone(carrier) ? `SMS zinaenda ${esc(orderSmsPhone(carrier))}.` : 'SMS za oda hazitumwi mpaka simu ithibitishwe kwa OTP.'}</p>
         <div class="co-edit-actions">
@@ -6893,6 +6956,8 @@ async function onViewSubmit(event) {
       location: data.get('location'),
       physicalAddress: data.get('location') || '',
       businessDetails: data.get('businessDetails'),
+      photoUrl: publicProfileUrl(data.get('photoUrl')),
+      socialUrl: publicProfileUrl(data.get('socialUrl')),
       notifySms: form.querySelector('[name="notifySms"]')
         ? Boolean(form.querySelector('[name="notifySms"]').checked)
         : state.carrier?.notifySms !== false,
@@ -6904,6 +6969,7 @@ async function onViewSubmit(event) {
     }
     await updateDoc(doc(db, 'carriers', id), patch);
     state.carrier = { ...state.carrier, ...patch };
+    state.publishedCarrierCards = new Set();
   }
   if (form.id === 'verifyForm') {
     const id = await requireCarrier();
